@@ -1,0 +1,48 @@
+{% comment %}
+  Abihacart AI Customer Support Chatbot - App Embed Block
+  Online Store 2.0 Theme App Extension
+  Zero-touch integration: toggled and styled directly in the Shopify Theme Editor.
+{% endcomment %}
+
+{% if block.settings.enable_chatbot %}
+  <div id="abihacart-chat-root"></div>
+
+  {{ 'abihacart-widget.css' | asset_url | stylesheet_tag }}
+
+  <script>
+    window.ABIHACART_CONFIG = {
+      backendUrl: {{ block.settings.backend_url | default: '' | json }},
+      shop: {{ shop.permanent_domain | json }},
+      primaryColor: {{ block.settings.primary_color | default: '#141414' | json }}
+    };
+  </script>
+
+  <script src="{{ 'abihacart-widget.js' | asset_url }}" defer></script>
+{% endif %}
+
+{% schema %}
+{
+  "name": "Abihacart Support Chat",
+  "target": "body",
+  "settings": [
+    {
+      "type": "checkbox",
+      "id": "enable_chatbot",
+      "label": "Enable Chatbot",
+      "default": true
+    },
+    {
+      "type": "text",
+      "id": "backend_url",
+      "label": "Backend API URL",
+      "default": ""
+    },
+    {
+      "type": "color",
+      "id": "primary_color",
+      "label": "Primary Accent Color",
+      "default": "#141414"
+    }
+  ]
+}
+{% endschema %}

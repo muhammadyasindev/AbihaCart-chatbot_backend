@@ -1,0 +1,42 @@
+# Abihacart AI Customer Support - Shopify App Configuration
+# Format: Shopify CLI 3.x App Specification
+# Documentation: https://shopify.dev/docs/apps/tools/cli/configuration
+
+client_id = "your_shopify_client_id_here"
+name = "Abihacart AI Customer Support"
+handle = "abihacart-support"
+application_url = "https://your-production-domain.com"
+embedded = true
+
+[build]
+automatically_update_urls_on_dev = false
+
+[access_scopes]
+# Scopes strictly required for read-only catalog, inventory, and two-field order verification
+# Note: Access to customer email/phone on orders requires Shopify Protected Customer Data (PCD) approval
+scopes = "read_products,read_inventory,read_orders,write_orders,read_draft_orders,write_draft_orders,read_fulfillments,read_customers"
+use_legacy_install_flow = false
+
+[auth]
+redirect_urls = [
+  "https://your-production-domain.com/api/shopify/auth/callback",
+  "http://localhost:5000/api/shopify/auth/callback"
+]
+
+[webhooks]
+api_version = "2026-10"
+
+  [[webhooks.subscriptions]]
+  topics = [ "orders/create", "orders/updated" ]
+  uri = "https://your-production-domain.com/api/webhooks/shopify"
+
+  [[webhooks.subscriptions]]
+  topics = [ "products/update", "inventory_levels/update" ]
+  uri = "https://your-production-domain.com/api/webhooks/shopify"
+
+  [[webhooks.subscriptions]]
+  topics = [ "app/uninstalled" ]
+  uri = "https://your-production-domain.com/api/webhooks/shopify"
+
+[pos]
+embedded = false
