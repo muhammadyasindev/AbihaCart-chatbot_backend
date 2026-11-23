@@ -6,7 +6,7 @@ dotenv.config({ path: path.resolve(__dirname, '../../.env') });
 
 const config = {
   env: (process.env.NODE_ENV || 'development').trim(),
-  port: parseInt((process.env.PORT || '5000').trim(), 10),
+  port: parseInt(process.env.PORT, 10) || 5000,
   mongodbUri: (process.env.MONGODB_URI || '').trim(),
 
   shopify: {

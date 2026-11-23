@@ -11,8 +11,7 @@ const startServer = async () => {
     const dbConnected = await connectDB();
     if (!dbConnected) {
       if (config.env === 'production') {
-        logger.error('CRITICAL: MongoDB Atlas connection required for production deployment. Halting startup.');
-        process.exit(1);
+        logger.error('CRITICAL: MongoDB Atlas connection not established on startup. Web server will start in degraded mode. Please verify MONGODB_URI and MongoDB Atlas IP access list (allow 0.0.0.0/0).');
       } else {
         logger.warn('NOTICE: MongoDB Atlas disconnected. Active in development/test fallback mode.');
       }
@@ -20,7 +19,7 @@ const startServer = async () => {
       logger.info('MongoDB Atlas live cluster connection established.');
     }
 
-    server = app.listen(config.port, () => {
+    server = app.listen(config.port, '0.0.0.0', () => {
       logger.info(`Abihacart AI Support Backend running on port ${config.port} [${config.env}]`);
       logger.info(`Health check available at: http://localhost:${config.port}/api/health`);
     });
