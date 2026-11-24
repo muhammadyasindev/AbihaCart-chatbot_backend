@@ -22,7 +22,7 @@ export default extension('purchase.thank-you.block.render', (root, api) => {
   let status = 'pending'; // 'pending' | 'confirmed' | 'cancelled' | 'loading'
   let feedbackMessage = '';
 
-  const backendUrl = settings.current?.backend_url || 'https://abihacart-support-backend.onrender.com';
+  const backendUrl = settings.current?.backend_url || 'https://abihacart-chatbot-backend.onrender.com';
   const orderNumber = order.current?.name || `#${order.current?.id || ''}`;
   const totalAmount = cost.totalAmount?.current?.amount || '0.00';
   const currencyCode = cost.totalAmount?.current?.currencyCode || 'AED';
