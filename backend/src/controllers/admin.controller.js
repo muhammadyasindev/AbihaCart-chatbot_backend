@@ -1015,10 +1015,124 @@ const getSystemSettings = async (req, res) => {
   });
 };
 
+/**
+ * Changes administrator or agent username and/or password
+ * Strictly requires verification of current password
+ */
+const changeCredentials = async (req, res, next) => {
+  try {
+    const { currentPassword, newUsername, newPassword } = req.body;
+    const userId = req.agent?.userId;
+
+    if (!currentPassword || typeof currentPassword !== 'string') {
+      return res.status(400).json({
+        status: 'fail',
+        statusCode: 400,
+        error: 'Bad Request',
+        code: 'MISSING_CURRENT_PASSWORD',
+        message: 'Current password is required to verify identity.',
+      });
+    }
+
+    const user = (await AdminUserStore.findById(userId)) ||
+      (req.agent?.username ? await AdminUserStore.findByUsernameOrEmail(req.agent.username) : null);
+    if (!user) {
+      return res.status(404).json({
+        status: 'fail',
+        statusCode: 404,
+        error: 'Not Found',
+        code: 'USER_NOT_FOUND',
+        message: 'Admin user not found.',
+      });
+    }
+
+    const isMatch = verifyPassword(currentPassword, user.passwordHash);
+    if (!isMatch) {
+      logger.warn(`Failed credential change: Incorrect current password for user [${user.username}]`);
+      return res.status(401).json({
+        status: 'fail',
+        statusCode: 401,
+        error: 'Unauthorized',
+        code: 'INVALID_CREDENTIALS',
+        message: 'The current password you entered is incorrect.',
+      });
+    }
+
+    const updates = {};
+
+    if (newUsername && typeof newUsername === 'string' && newUsername.trim()) {
+      const cleanUsername = newUsername.trim().toLowerCase();
+      if (cleanUsername !== user.username) {
+        if (cleanUsername.length < 3 || cleanUsername.length > 50) {
+          return res.status(400).json({
+            status: 'fail',
+            statusCode: 400,
+            error: 'Bad Request',
+            code: 'INVALID_USERNAME',
+            message: 'Username must be between 3 and 50 characters long.',
+          });
+        }
+        const existing = await AdminUserStore.findByUsernameOrEmail(cleanUsername);
+        if (existing && existing.id !== user.id) {
+          return res.status(409).json({
+            status: 'fail',
+            statusCode: 409,
+            error: 'Conflict',
+            code: 'USERNAME_TAKEN',
+            message: 'That username is already taken by another account.',
+          });
+        }
+        updates.username = cleanUsername;
+      }
+    }
+
+    if (newPassword && typeof newPassword === 'string') {
+      if (newPassword.length < 8) {
+        return res.status(400).json({
+          status: 'fail',
+          statusCode: 400,
+          error: 'Bad Request',
+          code: 'WEAK_PASSWORD',
+          message: 'New password must be at least 8 characters long.',
+        });
+      }
+      updates.passwordHash = hashPassword(newPassword);
+    }
+
+    if (Object.keys(updates).length === 0) {
+      return res.status(400).json({
+        status: 'fail',
+        statusCode: 400,
+        error: 'Bad Request',
+        code: 'NO_CHANGES_REQUESTED',
+        message: 'Please provide a new username or new password to update.',
+      });
+    }
+
+    const updatedUser = await AdminUserStore.updateUser(user.id, updates);
+    logger.info(`Credentials successfully updated for admin user [${updatedUser.username}]`);
+
+    return res.status(200).json({
+      status: 'success',
+      message: 'Credentials updated successfully.',
+      user: {
+        id: updatedUser.id,
+        username: updatedUser.username,
+        email: updatedUser.email,
+        name: updatedUser.name,
+        role: updatedUser.role,
+      },
+    });
+  } catch (err) {
+    return next(err);
+  }
+};
+
 module.exports = {
   login,
   getCurrentUser,
   logout,
+  changeCredentials,
   getOverview,
   getAnalytics,
   listConversations,

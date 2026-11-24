@@ -10,9 +10,9 @@ const config = {
   mongodbUri: (process.env.MONGODB_URI || '').trim(),
 
   shopify: {
-    shop: (process.env.SHOPIFY_SHOP || 'abihacart.myshopify.com').trim(),
+    shop: (process.env.SHOPIFY_STORE_DOMAIN || process.env.SHOPIFY_SHOP || 'abihacart.myshopify.com').trim(),
     clientId: (process.env.SHOPIFY_CLIENT_ID || '').trim(),
-    clientSecret: (process.env.SHOPIFY_CLIENT_SECRET || '').trim(),
+    clientSecret: (process.env.SHOPIFY_API_SECRET || process.env.SHOPIFY_WEBHOOK_SECRET || process.env.SHOPIFY_CLIENT_SECRET || '').trim(),
     apiVersion: (process.env.SHOPIFY_API_VERSION || '2026-10').trim(),
     scopes: (process.env.SHOPIFY_SCOPES || 'read_products,read_inventory,read_orders,write_orders,read_draft_orders,write_draft_orders,read_fulfillments,read_customers')
       .split(',')
@@ -42,9 +42,17 @@ const config = {
     senderId: (process.env.TWILIO_SENDER_ID || process.env.SMS_SENDER_ID || 'ABIHACART').trim(),
   },
 
-  agent: {
-    apiKey: (process.env.AGENT_API_KEY || (process.env.NODE_ENV === 'production' ? '' : 'abh_agent_secure_auth_token_default')).trim(),
-    adminApiKey: (process.env.ADMIN_API_KEY || (process.env.NODE_ENV === 'production' ? '' : 'abh_admin_secure_auth_token_default')).trim(),
+  resend: {
+    apiKey: (process.env.RESEND_API_KEY || '').trim(),
+    from: (process.env.EMAIL_FROM || 'Abihacart Orders <orders@abihacart.com>').trim(),
+  },
+
+  ownerNotification: {
+    provider: (process.env.OWNER_NOTIFICATION_PROVIDER || 'email').trim(),
+    ownerEmail: (process.env.OWNER_EMAIL || '').trim(),
+    emailFrom: (process.env.EMAIL_FROM || 'Abihacart Orders <orders@abihacart.com>').trim(),
+    resendApiKey: (process.env.RESEND_API_KEY || '').trim(),
+    ownerWhatsAppNumber: (process.env.OWNER_WHATSAPP_NUMBER || '').trim(),
   },
 
   urls: {

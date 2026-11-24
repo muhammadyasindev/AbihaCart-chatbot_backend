@@ -120,10 +120,17 @@ class AdminUserStore {
   static async findById(id) {
     if (!id) return null;
     if (this.isDBConnected()) {
-      return MongooseAdminUser.findOne({ id }).select('+passwordHash');
+      const query = mongoose.isValidObjectId(id)
+        ? { $or: [{ id }, { _id: id }] }
+        : { id };
+      return MongooseAdminUser.findOne(query).select('+passwordHash');
     }
     const mem = memoryAdminUsers.get(id);
-    return mem ? { ...mem } : null;
+    if (mem) return { ...mem };
+    for (const u of memoryAdminUsers.values()) {
+      if (u.id === id || u._id === id) return { ...u };
+    }
+    return null;
   }
 
   static async findByUsernameOrEmail(identifier) {
@@ -186,17 +193,25 @@ class AdminUserStore {
     };
 
     if (this.isDBConnected()) {
+      const query = mongoose.isValidObjectId(id)
+        ? { $or: [{ id }, { _id: id }] }
+        : { id };
       return MongooseAdminUser.findOneAndUpdate(
-        { id },
+        query,
         { $set: update },
         { new: true }
       );
     }
 
-    const user = memoryAdminUsers.get(id);
+    let user = memoryAdminUsers.get(id);
+    if (!user) {
+      for (const u of memoryAdminUsers.values()) {
+        if (u.id === id || u._id === id) { user = u; break; }
+      }
+    }
     if (!user) return null;
     Object.assign(user, update);
-    memoryAdminUsers.set(id, user);
+    memoryAdminUsers.set(user.id || id, user);
     return { ...user };
   }
 

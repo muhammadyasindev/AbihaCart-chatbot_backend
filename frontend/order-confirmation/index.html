@@ -1,0 +1,345 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Thank you! Your order has been received — Abihacart</title>
+  <link rel="stylesheet" href="/assets/widget.css">
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background-color: #f1f3f7;
+      color: #1a1e24;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+
+    /* Storefront Header matching visual reference */
+    .store-navbar {
+      background: #ffffff;
+      padding: 18px 48px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      border-bottom: 1px solid #e5e9f0;
+    }
+    .brand-section {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      text-decoration: none;
+      color: #111827;
+    }
+    .brand-bag-icon {
+      font-size: 26px;
+    }
+    .brand-name {
+      font-size: 22px;
+      font-weight: 800;
+      letter-spacing: -0.02em;
+      color: #111827;
+    }
+    .nav-links {
+      display: flex;
+      align-items: center;
+      gap: 32px;
+      list-style: none;
+    }
+    .nav-links a {
+      color: #4b5563;
+      text-decoration: none;
+      font-size: 15px;
+      font-weight: 500;
+      transition: color 0.15s;
+    }
+    .nav-links a:hover { color: #111827; }
+    .nav-actions {
+      display: flex;
+      align-items: center;
+      gap: 20px;
+      color: #4b5563;
+      font-size: 19px;
+    }
+    .cart-badge-wrap {
+      position: relative;
+      cursor: pointer;
+    }
+    .cart-counter {
+      position: absolute;
+      top: -6px;
+      right: -8px;
+      background: #ef4444;
+      color: #fff;
+      font-size: 10px;
+      font-weight: 700;
+      width: 16px;
+      height: 16px;
+      border-radius: 50%;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    /* Thank You Page Canvas */
+    .checkout-canvas {
+      flex: 1;
+      max-width: 1180px;
+      width: 100%;
+      margin: 36px auto;
+      padding: 0 24px;
+      display: flex;
+      gap: 36px;
+      align-items: flex-start;
+    }
+    .thankyou-left {
+      flex: 1;
+      max-width: 480px;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      text-align: center;
+    }
+    .thankyou-check-circle {
+      width: 76px;
+      height: 76px;
+      border-radius: 50%;
+      background: #16a34a;
+      color: #ffffff;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      font-size: 38px;
+      font-weight: 900;
+      margin-bottom: 20px;
+      box-shadow: 0 8px 24px rgba(22, 163, 74, 0.25);
+    }
+    .thankyou-heading {
+      font-size: 32px;
+      font-weight: 800;
+      color: #111827;
+      margin-bottom: 6px;
+    }
+    .thankyou-sub {
+      font-size: 16px;
+      color: #4b5563;
+      margin-bottom: 24px;
+    }
+    .order-meta-card {
+      background: #ffffff;
+      border: 1px solid #e5e9f0;
+      border-radius: 14px;
+      padding: 16px 20px;
+      width: 100%;
+      margin-bottom: 16px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+    }
+    .order-meta-num {
+      font-size: 15px;
+      font-weight: 700;
+      color: #111827;
+      margin-bottom: 2px;
+    }
+    .order-meta-date {
+      font-size: 13px;
+      color: #6b7280;
+    }
+    .summary-card {
+      background: #ffffff;
+      border: 1px solid #e5e9f0;
+      border-radius: 14px;
+      padding: 18px 20px;
+      width: 100%;
+      text-align: left;
+      margin-bottom: 20px;
+      box-shadow: 0 2px 8px rgba(0,0,0,0.03);
+    }
+    .summary-title {
+      font-size: 14px;
+      font-weight: 700;
+      color: #111827;
+      margin-bottom: 14px;
+    }
+    .summary-item {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+    }
+    .summary-img {
+      width: 54px;
+      height: 54px;
+      border-radius: 8px;
+      object-fit: cover;
+      background: #f3f4f6;
+      border: 1px solid #e5e7eb;
+    }
+    .summary-info {
+      flex: 1;
+    }
+    .summary-item-name {
+      font-size: 14px;
+      font-weight: 600;
+      color: #111827;
+      margin-bottom: 2px;
+    }
+    .summary-item-qty {
+      font-size: 12.5px;
+      color: #6b7280;
+    }
+    .btn-continue {
+      width: 100%;
+      background: #1e293b;
+      color: #ffffff;
+      border: none;
+      padding: 14px 20px;
+      border-radius: 12px;
+      font-size: 14.5px;
+      font-weight: 600;
+      cursor: pointer;
+      transition: background 0.15s;
+    }
+    .btn-continue:hover { background: #0f172a; }
+
+    /* Control bar to re-launch popup */
+    .preview-control-bar {
+      position: fixed;
+      bottom: 20px;
+      left: 50%;
+      transform: translateX(-50%);
+      background: rgba(17, 24, 39, 0.95);
+      backdrop-filter: blur(8px);
+      padding: 10px 20px;
+      border-radius: 9999px;
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      box-shadow: 0 10px 30px rgba(0,0,0,0.25);
+      z-index: 1000;
+      color: #fff;
+      font-size: 13px;
+    }
+    .preview-control-bar button {
+      background: #16a34a;
+      color: #ffffff;
+      border: none;
+      padding: 6px 14px;
+      border-radius: 20px;
+      font-size: 12.5px;
+      font-weight: 600;
+      cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+
+  <!-- Shopify Storefront Mock Navigation -->
+  <header class="store-navbar">
+    <a href="/" class="brand-section">
+      <span class="brand-bag-icon">🛍️</span>
+      <span class="brand-name">Abihacart</span>
+    </a>
+    <nav>
+      <ul class="nav-links">
+        <li><a href="#">Home</a></li>
+        <li><a href="#">Shop</a></li>
+        <li><a href="#">Contact</a></li>
+      </ul>
+    </nav>
+    <div class="nav-actions">
+      <span>🔍</span>
+      <span>👤</span>
+      <div class="cart-badge-wrap">
+        <span>🛒</span>
+        <span class="cart-counter">1</span>
+      </div>
+    </div>
+  </header>
+
+  <!-- Shopify Thank You Page Layout -->
+  <main class="checkout-canvas">
+    <div class="thankyou-left">
+      <div class="thankyou-check-circle">✓</div>
+      <h1 class="thankyou-heading">Thank you!</h1>
+      <p class="thankyou-sub">Your order has been received.</p>
+
+      <div class="order-meta-card">
+        <div class="order-meta-num">Order #1052</div>
+        <div class="order-meta-date">Date: Apr 26, 2025</div>
+      </div>
+
+      <div class="summary-card">
+        <div class="summary-title">Order Summary</div>
+        <div class="summary-item">
+          <img src="https://images.unsplash.com/photo-1517668808822-9ebb02f2a0e6?w=160&auto=format&fit=crop&q=80" alt="Premium Coffee Maker" class="summary-img" />
+          <div class="summary-info">
+            <div class="summary-item-name">Premium Coffee Maker</div>
+            <div class="summary-item-qty">Qty: 1</div>
+          </div>
+          <div style="font-size: 14px; font-weight: 700; color: #111827;">AED 249.00</div>
+        </div>
+      </div>
+
+      <button class="btn-continue" onclick="alert('Continuing shopping...')">Continue Shopping</button>
+    </div>
+  </main>
+
+  <!-- Embed Script for Abihacart Order Confirmation Popup -->
+  <script src="/assets/abihacart-order-popup.js"></script>
+  <script>
+    const visualReferenceOrder = {
+      shopifyOrderId: '1052',
+      orderNumber: '#1052',
+      customerName: 'Fatima Al Mansoor',
+      currency: 'AED',
+      totalAmount: 249.00,
+      lineItems: [
+        {
+          title: 'Premium Coffee Maker',
+          variantTitle: '',
+          quantity: 1,
+          price: 249.00,
+          image: 'https://images.unsplash.com/photo-1517668808822-9ebb02f2a0e6?w=160&auto=format&fit=crop&q=80'
+        }
+      ]
+    };
+
+    function launchOrderPopup() {
+      if (window.AbihacartOrderPopup && window.AbihacartOrderPopup.open) {
+        window.AbihacartOrderPopup.open(visualReferenceOrder, {
+          onConfirm: async () => {
+            try {
+              const res = await fetch('http://localhost:10000/api/orders/confirm-shopify-order', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ orderId: visualReferenceOrder.shopifyOrderId }),
+              });
+              if (res.ok) return await res.json();
+            } catch (e) {}
+            return { success: true, message: 'Order confirmed successfully.' };
+          },
+          onCancel: async () => {
+            try {
+              const res = await fetch('http://localhost:10000/api/orders/cancel-shopify-order', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                  orderId: visualReferenceOrder.shopifyOrderId,
+                  reason: 'Customer cancelled via popup'
+                }),
+              });
+              if (res.ok) return await res.json();
+            } catch (e) {}
+            return { success: true, message: 'Cancellation request received.' };
+          }
+        });
+      }
+    }
+
+    // Auto-launch popup after a gentle delay to demonstrate Thank You page appearance
+    window.addEventListener('DOMContentLoaded', () => {
+      setTimeout(launchOrderPopup, 400);
+    });
+  </script>
+</body>
+</html>

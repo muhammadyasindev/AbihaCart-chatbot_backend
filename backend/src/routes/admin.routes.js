@@ -17,6 +17,7 @@ router.use(adminApiLimiter);
 
 router.get('/auth/me', requireAgentAuth(['agent', 'admin']), adminController.getCurrentUser);
 router.post('/auth/logout', requireAgentAuth(['agent', 'admin']), adminController.logout);
+router.post('/auth/change-credentials', requireAgentAuth(['agent', 'admin']), adminController.changeCredentials);
 
 // Dashboard Overview & Real Analytics
 router.get('/overview', requireAgentAuth(['agent', 'admin']), adminController.getOverview);

@@ -3,6 +3,7 @@ const orderService = require('../services/order.service');
 const shopifyService = require('../services/shopify.service');
 const smsService = require('../services/sms.service');
 const { PendingOrderStore, maskPhone } = require('../models/PendingOrder');
+const orderConfirmationService = require('../services/orderConfirmation.service');
 const config = require('../config/env');
 
 /**
@@ -904,6 +905,571 @@ const handleTwilioStatusCallback = async (req, res, next) => {
   }
 };
 
+/**
+ * Luxury HTML Confirmation Review Page Template (Phase 10 Abihacart Assistant Popup)
+ */
+function renderOrderReviewHtml({ token, record }) {
+  const itemsHtml = (record.lineItems || []).map(item => {
+    const variant = item.variantTitle ? ` • <span style="color: #6b7280;">${item.variantTitle}</span>` : '';
+    const imgHtml = item.image 
+      ? `<img src="${item.image}" alt="${item.title}" style="width: 44px; height: 44px; border-radius: 8px; object-fit: cover; background: #ece8e1; border: 1px solid #e0dbd1; flex-shrink: 0;" />`
+      : `<div style="width: 44px; height: 44px; border-radius: 8px; background: #ece8e1; border: 1px solid #e0dbd1; display: flex; align-items: center; justify-content: center; font-size: 18px; flex-shrink: 0;">🛍️</div>`;
+    return `
+      <div style="display: flex; align-items: center; gap: 12px; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px dashed #e5e0d8;">
+        ${imgHtml}
+        <div style="flex: 1; min-width: 0; text-align: left;">
+          <div style="font-size: 13px; font-weight: 600; color: #141414; white-space: nowrap; overflow: hidden; text-overflow: ellipsis;">${item.title}</div>
+          <div style="font-size: 11.5px; color: #6b7280;">Qty: ${item.quantity}${variant}</div>
+        </div>
+        <div style="font-size: 13px; font-weight: 700; color: #141414; text-align: right;">${record.currency} ${(item.price * item.quantity).toFixed(2)}</div>
+      </div>
+    `;
+  }).join('') || '<div style="color: #666; font-size: 13px; text-align: center;">No items listed</div>';
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Abihacart Assistant — Order Confirmation ${record.orderNumber}</title>
+  <style>
+    body {
+      margin: 0; padding: 16px; min-height: 100vh; display: flex; align-items: center; justify-content: center;
+      background: rgba(15, 15, 15, 0.95);
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      box-sizing: border-box;
+    }
+    .abh-popup-card {
+      background: #ffffff; border-radius: 24px; max-width: 480px; width: 100%;
+      box-shadow: 0 24px 60px rgba(0, 0, 0, 0.35); border: 1px solid rgba(0, 0, 0, 0.06);
+      overflow: hidden; display: flex; flex-direction: column; position: relative;
+    }
+    .abh-popup-header {
+      display: flex; align-items: center; justify-content: space-between;
+      padding: 20px 24px 14px 24px; border-bottom: 1px solid #f3f4f6;
+    }
+    .abh-header-left { display: flex; align-items: center; gap: 14px; }
+    .abh-robot-avatar {
+      width: 72px; height: 64px; object-fit: contain; flex-shrink: 0;
+    }
+    .abh-robot-icon {
+      width: 50px; height: 50px; border-radius: 12px;
+      background: linear-gradient(135deg, #1f1f1f 0%, #121212 100%);
+      border: 1.5px solid #b89a63; display: flex; align-items: center; justify-content: center;
+      color: #b89a63; font-size: 24px;
+    }
+    .abh-brand-title { font-size: 17px; font-weight: 700; color: #111827; line-height: 1.2; margin: 0; }
+    .abh-status-pill {
+      background: #dcfce7; color: #15803d; border-radius: 9999px;
+      font-size: 12px; font-weight: 600; padding: 3px 10px; display: inline-flex; align-items: center; gap: 4px; margin-top: 5px;
+    }
+    .abh-close-btn {
+      position: absolute; top: 16px; right: 18px;
+      background: none; border: none; color: #374151; cursor: pointer; font-size: 20px;
+      line-height: 1; padding: 6px; border-radius: 50%; display: flex; align-items: center; justify-content: center;
+      transition: color 0.15s, background 0.15s;
+    }
+    .abh-close-btn:hover { color: #111827; background: #f3f4f6; }
+    .abh-popup-body { padding: 22px 24px 24px 24px; text-align: center; }
+    .abh-greeting { font-size: 16px; font-weight: 500; color: #1f2937; margin-bottom: 8px; line-height: 1.4; }
+    .abh-placed-text { font-size: 16px; color: #1f2937; margin-bottom: 8px; line-height: 1.4; }
+    .abh-order-ref { font-weight: 700; color: #111827; }
+    .abh-prompt-text { font-size: 16.5px; font-weight: 700; color: #111827; margin: 14px 0 20px 0; }
+    .abh-order-box {
+      background: #faf8f5; border: 1px solid #e8e5df; border-radius: 14px;
+      padding: 14px; margin-bottom: 20px; text-align: left;
+    }
+    .abh-total-row {
+      display: flex; justify-content: space-between; align-items: center;
+      padding-top: 10px; margin-top: 10px; border-top: 1px solid #e0dbd1;
+      font-weight: 700; font-size: 14px;
+    }
+    .abh-total-val { color: #16a34a; font-size: 16px; font-weight: 800; }
+    .abh-actions { display: flex; flex-direction: column; gap: 12px; margin-bottom: 16px; }
+    .abh-btn-confirm {
+      width: 100%; background: #16a34a; color: #ffffff; border: none; padding: 14px 20px;
+      border-radius: 12px; font-size: 15px; font-weight: 700; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 8px;
+      box-shadow: 0 4px 14px rgba(22, 163, 74, 0.25); transition: background 0.15s;
+    }
+    .abh-btn-confirm:hover { background: #15803d; }
+    .abh-btn-cancel {
+      width: 100%; background: #ffffff; color: #ef4444; border: 1.5px solid #ef4444;
+      padding: 13px 20px; border-radius: 12px; font-size: 15px; font-weight: 600; cursor: pointer;
+      display: flex; align-items: center; justify-content: center; gap: 8px; transition: background 0.15s;
+    }
+    .abh-btn-cancel:hover { background: rgba(239, 68, 68, 0.05); }
+    .abh-icon-check {
+      width: 22px; height: 22px; border-radius: 50%; background: #ffffff; color: #16a34a;
+      display: inline-flex; align-items: center; justify-content: center; font-size: 13px; font-weight: 900;
+    }
+    .abh-icon-cancel {
+      width: 22px; height: 22px; border-radius: 50%; background: #ef4444; color: #ffffff;
+      display: inline-flex; align-items: center; justify-content: center; font-size: 12px; font-weight: 900;
+    }
+    .abh-security-msg {
+      display: flex; align-items: center; justify-content: center; gap: 6px;
+      font-size: 12px; color: #6b7280;
+    }
+  </style>
+</head>
+<body>
+  <div class="abh-popup-card" id="abh-card">
+    <button class="abh-close-btn" onclick="document.getElementById('abh-card').style.display='none'" aria-label="Close">✕</button>
+    <div class="abh-popup-header">
+      <div class="abh-header-left">
+        <img src="/api/orders/robot-avatar.png" alt="Abihacart Assistant" class="abh-robot-avatar" onerror="this.outerHTML='<div class=\\'abh-robot-icon\\'>🤖</div>'" />
+        <div>
+          <h2 class="abh-brand-title">Abihacart Assistant</h2>
+          <div class="abh-status-pill">Order Received ✓</div>
+        </div>
+      </div>
+    </div>
+    <div class="abh-popup-body" id="abh-body">
+      <div class="abh-greeting">Assalam-o-Alaikum! Thank you for shopping with <strong>Abihacart</strong>.</div>
+      <div class="abh-placed-text">Your order <span class="abh-order-ref">${record.orderNumber}</span> has been placed successfully.</div>
+      <div class="abh-prompt-text">Would you like to confirm your order?</div>
+
+      <div class="abh-order-box">
+        ${itemsHtml}
+        <div class="abh-total-row">
+          <span>Total Amount:</span>
+          <span class="abh-total-val">${record.currency} ${Number(record.totalAmount).toFixed(2)}</span>
+        </div>
+      </div>
+
+      <div class="abh-actions">
+        <form method="POST" action="/api/orders/confirm-shopify-order" style="margin: 0;">
+          <input type="hidden" name="token" value="${token}" />
+          <button type="submit" class="abh-btn-confirm">
+            <span class="abh-icon-check">✓</span> Confirm My Order
+          </button>
+        </form>
+        <button type="button" class="abh-btn-cancel" onclick="showCancelPrompt()">
+          <span class="abh-icon-cancel">✕</span> Cancel My Order
+        </button>
+      </div>
+
+      <div class="abh-security-msg">
+        <span>🛡️</span> Your response is secure and will be processed immediately.
+      </div>
+    </div>
+  </div>
+  <script>
+    function showCancelPrompt() {
+      const body = document.getElementById('abh-body');
+      body.innerHTML = \`
+        <div style="padding: 16px 4px; text-align: center;">
+          <div style="font-size: 32px; margin-bottom: 12px;">⚠️</div>
+          <h3 style="font-size: 17px; margin-bottom: 8px;">Cancel Order ${record.orderNumber}?</h3>
+          <p style="font-size: 13.5px; color: #555; margin-bottom: 20px;">Are you sure you want to cancel this order? This action cannot be undone.</p>
+          <div style="display: flex; gap: 10px;">
+            <button onclick="window.location.reload()" class="abh-btn-cancel" style="border-color: #d1d5db; color: #374151;">Keep Order</button>
+            <form method="POST" action="/api/orders/cancel-shopify-order" style="flex: 1; margin: 0;">
+              <input type="hidden" name="token" value="${token}" />
+              <button type="submit" class="abh-btn-confirm" style="background: #ef4444;">Yes, Cancel</button>
+            </form>
+          </div>
+        </div>
+      \`;
+    }
+  </script>
+</body>
+</html>`;
+}
+
+/**
+ * Confirms a Shopify order placed on the store via secure single-use token (Phase 9.19)
+ * GET /api/orders/confirm-shopify-order: Displays safe confirmation review page (does not mutate)
+ * POST /api/orders/confirm-shopify-order: Atomically confirms order and sends owner email via Resend
+ */
+const confirmShopifyOrder = async (req, res, next) => {
+  try {
+    const token = req.query.token || req.body?.token;
+    const isHtmlRequest = Boolean(req.headers.accept && req.headers.accept.includes('text/html'));
+    const isGet = req.method === 'GET';
+    const autoConfirmParam = req.query.confirm === 'true' || req.query.confirm === '1';
+
+    if (!token) {
+      if (isHtmlRequest) {
+        return res.status(400).send(renderOrderResultHtml({
+          title: 'Missing Confirmation Token',
+          statusType: 'error',
+          message: 'No confirmation token was provided. Please use the complete link sent in your SMS.',
+        }));
+      }
+      return res.status(400).json({
+        status: 'fail',
+        statusCode: 400,
+        error: 'Bad Request',
+        code: 'MISSING_TOKEN',
+        message: 'Confirmation token is required.',
+      });
+    }
+
+    // 1. If GET without explicit confirm param: perform safe review lookup without mutating state
+    if (isGet && !autoConfirmParam) {
+      const reviewResult = await orderConfirmationService.getOrderReviewByToken(token);
+      if (!reviewResult.success) {
+        if (isHtmlRequest) {
+          const isExpired = reviewResult.code === 'TOKEN_EXPIRED';
+          return res.status(reviewResult.statusCode).send(renderOrderResultHtml({
+            title: isExpired ? 'Confirmation Link Expired' : 'Invalid Confirmation Link',
+            statusType: isExpired ? 'warning' : 'error',
+            message: reviewResult.message,
+          }));
+        }
+        return res.status(reviewResult.statusCode).json({
+          status: 'fail',
+          statusCode: reviewResult.statusCode,
+          error: reviewResult.code === 'TOKEN_EXPIRED' ? 'Gone' : (reviewResult.statusCode === 404 ? 'Not Found' : 'Forbidden'),
+          code: reviewResult.code,
+          message: reviewResult.message,
+        });
+      }
+
+      const record = reviewResult.record;
+      if (reviewResult.alreadyConfirmed) {
+        if (isHtmlRequest) {
+          return res.status(200).send(renderOrderResultHtml({
+            title: 'Order Already Confirmed',
+            statusType: 'success',
+            message: `This order (${record.orderNumber}) was already confirmed. Our team has been notified.`,
+            orderReference: record.orderNumber,
+            shopifyOrderName: record.orderNumber,
+            totalAmount: record.totalAmount,
+            currency: record.currency,
+            customerName: record.customerName,
+            maskedPhone: record.maskedPhone,
+            deliveryAddress: record.shippingAddress,
+            isAlreadyConfirmed: true,
+          }));
+        }
+        return res.status(200).json({
+          status: 'success',
+          statusCode: 200,
+          alreadyConfirmed: true,
+          message: 'Order has already been confirmed.',
+          order: {
+            shopifyOrderId: record.shopifyOrderId,
+            orderNumber: record.orderNumber,
+            status: record.status,
+            confirmedAt: record.confirmedAt,
+            totalAmount: record.totalAmount,
+            currency: record.currency,
+          },
+        });
+      }
+
+      // Valid pending order: render review page or return review details
+      if (isHtmlRequest) {
+        return res.status(200).send(renderOrderReviewHtml({ token, record }));
+      }
+
+      return res.status(200).json({
+        status: 'success',
+        statusCode: 200,
+        review: true,
+        alreadyConfirmed: false,
+        canConfirm: true,
+        order: {
+          shopifyOrderId: record.shopifyOrderId,
+          orderNumber: record.orderNumber,
+          status: record.status,
+          customerName: record.customerName,
+          totalAmount: record.totalAmount,
+          currency: record.currency,
+          lineItems: record.lineItems,
+          shippingAddress: record.shippingAddress,
+        },
+      });
+    }
+
+    // 2. POST (or GET with confirm=true): execute atomic confirmation & notify owner via Resend
+    const result = await orderConfirmationService.confirmOrderWithToken(token);
+
+    if (!result.success) {
+      if (isHtmlRequest) {
+        const isExpired = result.code === 'TOKEN_EXPIRED';
+        return res.status(result.statusCode).send(renderOrderResultHtml({
+          title: isExpired ? 'Confirmation Link Expired' : 'Invalid Confirmation Link',
+          statusType: isExpired ? 'warning' : 'error',
+          message: result.message,
+        }));
+      }
+      return res.status(result.statusCode).json({
+        status: 'fail',
+        statusCode: result.statusCode,
+        error: result.code === 'TOKEN_EXPIRED' ? 'Gone' : (result.statusCode === 404 ? 'Not Found' : 'Forbidden'),
+        code: result.code,
+        message: result.message,
+      });
+    }
+
+    const record = result.record;
+    if (result.alreadyConfirmed) {
+      if (isHtmlRequest) {
+        return res.status(200).send(renderOrderResultHtml({
+          title: 'Order Already Confirmed',
+          statusType: 'success',
+          message: `This order (${record.orderNumber}) was already confirmed. Our team has been notified.`,
+          orderReference: record.orderNumber,
+          shopifyOrderName: record.orderNumber,
+          totalAmount: record.totalAmount,
+          currency: record.currency,
+          customerName: record.customerName,
+          maskedPhone: record.maskedPhone,
+          deliveryAddress: record.shippingAddress,
+          isAlreadyConfirmed: true,
+        }));
+      }
+      return res.status(200).json({
+        status: 'success',
+        statusCode: 200,
+        alreadyConfirmed: true,
+        message: 'Order has already been confirmed.',
+        order: {
+          shopifyOrderId: record.shopifyOrderId,
+          orderNumber: record.orderNumber,
+          status: record.status,
+          confirmedAt: record.confirmedAt,
+          totalAmount: record.totalAmount,
+          currency: record.currency,
+        },
+      });
+    }
+
+    if (isHtmlRequest) {
+      return res.status(200).send(renderOrderResultHtml({
+        title: 'Order Confirmed Successfully!',
+        statusType: 'success',
+        message: `Thank you for confirming your order (${record.orderNumber})! The store owner has been notified.`,
+        orderReference: record.orderNumber,
+        shopifyOrderName: record.orderNumber,
+        totalAmount: record.totalAmount,
+        currency: record.currency,
+        customerName: record.customerName,
+        maskedPhone: record.maskedPhone,
+        deliveryAddress: record.shippingAddress,
+      }));
+    }
+
+    return res.status(200).json({
+      status: 'success',
+      statusCode: 200,
+      alreadyConfirmed: false,
+      message: 'Order confirmed successfully. The store owner has been notified via email.',
+      order: {
+        shopifyOrderId: record.shopifyOrderId,
+        orderNumber: record.orderNumber,
+        status: record.status,
+        confirmedAt: record.confirmedAt,
+        totalAmount: record.totalAmount,
+        currency: record.currency,
+        ownerNotification: result.ownerEmailNotification || result.ownerNotification,
+      },
+    });
+  } catch (err) {
+    logger.error('Error confirming Shopify order:', { error: err.message, stack: err.stack });
+    return next(err);
+  }
+};
+
+/**
+ * Cancels a Shopify order placed on the store via secure token or verified request (Phase 10)
+ * POST /api/orders/cancel-shopify-order
+ */
+const cancelShopifyOrder = async (req, res, next) => {
+  try {
+    const token = req.query.token || req.body?.token;
+    const orderId = req.query.orderId || req.body?.orderId;
+    const reason = req.body?.reason || req.query.reason || 'Customer requested cancellation via popup';
+    const isHtmlRequest = Boolean(req.headers.accept && req.headers.accept.includes('text/html'));
+
+    if (!token && !orderId) {
+      if (isHtmlRequest) {
+        return res.status(400).send(renderOrderResultHtml({
+          title: 'Missing Identifier',
+          statusType: 'error',
+          message: 'Order confirmation token or order ID is required to cancel this order.',
+        }));
+      }
+      return res.status(400).json({
+        status: 'fail',
+        statusCode: 400,
+        error: 'Bad Request',
+        code: 'MISSING_IDENTIFIER',
+        message: 'Order confirmation token or order ID is required.',
+      });
+    }
+
+    const result = await orderConfirmationService.cancelOrderWithToken(token, reason, { orderId });
+
+    if (!result.success) {
+      if (isHtmlRequest) {
+        const isExpired = result.code === 'TOKEN_EXPIRED';
+        return res.status(result.statusCode).send(renderOrderResultHtml({
+          title: isExpired ? 'Cancellation Link Expired' : 'Invalid Cancellation Request',
+          statusType: isExpired ? 'warning' : 'error',
+          message: result.message,
+        }));
+      }
+      return res.status(result.statusCode).json({
+        status: 'fail',
+        statusCode: result.statusCode,
+        error: result.code === 'TOKEN_EXPIRED' ? 'Gone' : (result.statusCode === 404 ? 'Not Found' : 'Forbidden'),
+        code: result.code,
+        message: result.message,
+      });
+    }
+
+    const record = result.record;
+    if (result.alreadyCancelled) {
+      if (isHtmlRequest) {
+        return res.status(200).send(renderOrderResultHtml({
+          title: 'Order Already Cancelled',
+          statusType: 'warning',
+          message: `This order (${record.orderNumber}) was already cancelled. Our store team has been notified.`,
+          orderReference: record.orderNumber,
+          shopifyOrderName: record.orderNumber,
+          totalAmount: record.totalAmount,
+          currency: record.currency,
+          customerName: record.customerName,
+          maskedPhone: record.maskedPhone,
+          deliveryAddress: record.shippingAddress,
+        }));
+      }
+      return res.status(200).json({
+        status: 'success',
+        statusCode: 200,
+        alreadyCancelled: true,
+        message: 'Order has already been cancelled.',
+        order: {
+          shopifyOrderId: record.shopifyOrderId,
+          orderNumber: record.orderNumber,
+          status: record.status,
+          cancelledAt: record.cancelledAt,
+          cancellationStatus: record.cancellationStatus,
+        },
+      });
+    }
+
+    if (isHtmlRequest) {
+      return res.status(200).send(renderOrderResultHtml({
+        title: result.isShopifyCancelled ? 'Order Cancelled' : 'Cancellation Request Submitted',
+        statusType: 'warning',
+        message: result.isShopifyCancelled
+          ? `Your order (${record.orderNumber}) has been cancelled successfully in Shopify.`
+          : `Your cancellation request for order (${record.orderNumber}) has been recorded. Our team has been notified.`,
+        orderReference: record.orderNumber,
+        shopifyOrderName: record.orderNumber,
+        totalAmount: record.totalAmount,
+        currency: record.currency,
+        customerName: record.customerName,
+        maskedPhone: record.maskedPhone,
+        deliveryAddress: record.shippingAddress,
+      }));
+    }
+
+    return res.status(200).json({
+      status: 'success',
+      statusCode: 200,
+      alreadyCancelled: false,
+      isShopifyCancelled: result.isShopifyCancelled,
+      message: result.message,
+      order: {
+        shopifyOrderId: record.shopifyOrderId,
+        orderNumber: record.orderNumber,
+        status: record.status,
+        cancelledAt: record.cancelledAt,
+        cancellationStatus: record.cancellationStatus,
+        cancellationReason: record.cancellationReason,
+      },
+    });
+  } catch (err) {
+    logger.error('Error cancelling Shopify order:', { error: err.message, stack: err.stack });
+    return next(err);
+  }
+};
+
+/**
+ * Retrieves order confirmation status for Shopify Thank You page popup
+ * GET /api/orders/checkout-confirmation-status
+ */
+const getCheckoutConfirmationStatus = async (req, res, next) => {
+  try {
+    const { orderId, orderNumber, token, email, phone } = req.query;
+    const result = await orderConfirmationService.getOrderStatusForCheckout({
+      orderId,
+      orderNumber,
+      token,
+      email,
+      phone,
+    });
+
+    if (!result.success) {
+      return res.status(result.statusCode).json({
+        status: 'fail',
+        statusCode: result.statusCode,
+        code: result.code,
+        message: result.message,
+      });
+    }
+
+    const record = result.record;
+    return res.status(200).json({
+      status: 'success',
+      statusCode: 200,
+      confirmationStatus: record.status,
+      record: {
+        shopifyOrderId: record.shopifyOrderId,
+        orderNumber: record.orderNumber,
+        customerName: record.customerName,
+        currency: record.currency,
+        totalAmount: record.totalAmount,
+        subtotal: record.subtotal,
+        shippingCharges: record.shippingCharges,
+        lineItems: record.lineItems,
+        status: record.status,
+        confirmationToken: record.confirmationToken,
+        confirmedAt: record.confirmedAt,
+        cancelledAt: record.cancelledAt,
+      },
+    });
+  } catch (err) {
+    logger.error('Error fetching checkout confirmation status:', { error: err.message });
+    return next(err);
+  }
+};
+
+/**
+ * Serves the embeddable Abihacart popup script for Shopify Thank You / Order Status page
+ * GET /api/orders/popup-script.js
+ */
+const servePopupScript = (req, res) => {
+  const fs = require('fs');
+  const path = require('path');
+  const scriptPath = path.join(__dirname, '../assets/abihacart-order-popup.js');
+  res.setHeader('Content-Type', 'application/javascript; charset=UTF-8');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', 'public, max-age=300');
+  fs.createReadStream(scriptPath).pipe(res);
+};
+
+/**
+ * Serves the Abihacart Assistant 3D robot avatar image (Phase 10)
+ * GET /api/orders/robot-avatar.png
+ */
+const serveRobotAvatar = (req, res) => {
+  const fs = require('fs');
+  const path = require('path');
+  const imgPath = path.join(__dirname, '../assets/abihacart-robot.png');
+  res.setHeader('Content-Type', 'image/png');
+  res.setHeader('Access-Control-Allow-Origin', '*');
+  res.setHeader('Cache-Control', 'public, max-age=86400');
+  fs.createReadStream(imgPath).pipe(res);
+};
+
 module.exports = {
   trackOrder,
   cancelOrderRefusal,
@@ -911,6 +1477,11 @@ module.exports = {
   refundOrderRefusal,
   placeSmsOrder,
   confirmSmsOrder,
+  confirmShopifyOrder,
+  cancelShopifyOrder,
+  getCheckoutConfirmationStatus,
+  servePopupScript,
+  serveRobotAvatar,
   getSmsOrderDetails,
   listSmsOrders,
   handleTwilioStatusCallback,

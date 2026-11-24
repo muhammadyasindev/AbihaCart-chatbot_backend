@@ -85,6 +85,21 @@ const adminApiLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// Order confirmation limiter: 30 requests per 15 minutes per IP
+const orderConfirmationLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  max: 60,
+  standardHeaders: true,
+  legacyHeaders: false,
+  message: {
+    status: 'fail',
+    statusCode: 429,
+    error: 'Too Many Requests',
+    code: 'RATE_LIMIT_EXCEEDED',
+    message: 'Too many confirmation attempts. Please try again later.',
+  },
+});
+
 module.exports = {
   apiLimiter,
   chatLimiter,
@@ -94,4 +109,5 @@ module.exports = {
   agentReplyLimiter,
   adminLoginLimiter,
   adminApiLimiter,
+  orderConfirmationLimiter,
 };

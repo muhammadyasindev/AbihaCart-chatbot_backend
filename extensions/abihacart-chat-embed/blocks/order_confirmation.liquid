@@ -1,0 +1,36 @@
+{% comment %}
+  Abihacart Assistant — Urgent Order Confirmation Popup Embed Block
+  Automatically loads the order confirmation popup on Thank You / Order Status pages
+{% endcomment %}
+
+{% if block.settings.enable_order_popup %}
+  <div id="abihacart-order-confirmation-root"
+       data-backend-url="{{ block.settings.backend_url | default: 'https://abihacart-chatbot-backend.onrender.com' | escape }}"
+       data-order-id="{{ order.id | default: checkout.order_id }}"
+       data-order-number="{{ order.name | default: checkout.order_name }}"
+       data-token="{{ checkout.token }}">
+  </div>
+
+  <script src="{{ 'abihacart-order-popup.js' | asset_url }}" defer></script>
+{% endif %}
+
+{% schema %}
+{
+  "name": "Order Confirmation Popup",
+  "target": "body",
+  "settings": [
+    {
+      "type": "checkbox",
+      "id": "enable_order_popup",
+      "label": "Enable Order Confirmation Popup",
+      "default": true
+    },
+    {
+      "type": "text",
+      "id": "backend_url",
+      "label": "Backend URL",
+      "default": ""
+    }
+  ]
+}
+{% endschema %}

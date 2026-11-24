@@ -1,5 +1,6 @@
 const logger = require('../utils/logger');
 const cacheService = require('../services/cache.service');
+const orderConfirmationService = require('../services/orderConfirmation.service');
 
 /**
  * Shopify Webhook Ingress Controller
@@ -44,9 +45,13 @@ const handleShopifyWebhook = async (req, res) => {
       }
 
       case 'orders/create': {
-        // Strictly read-only: record event notification without modifying orders
         const orderNumber = payload.name || payload.order_number;
-        logger.info(`Read-only order event acknowledged: [orders/create] Order: ${orderNumber}`);
+        logger.info(`Shopify order created event received: [orders/create] Order: ${orderNumber}`);
+        try {
+          await orderConfirmationService.processShopifyOrderCreated(payload, shop);
+        } catch (err) {
+          logger.error(`Error processing Shopify order creation confirmation: ${err.message}`, { error: err.stack });
+        }
         break;
       }
 

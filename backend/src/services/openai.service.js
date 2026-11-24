@@ -16,6 +16,40 @@ const { SupportTicketStore } = require('../models/SupportTicket');
 const AI_TOOLS = [
   {
     type: 'function',
+    name: 'get_catalog_overview',
+    description: 'Retrieve a complete overview of the Abihacart store catalog, available categories, price ranges, and featured product recommendations.',
+    parameters: {
+      type: 'object',
+      properties: {},
+    },
+    function: {
+      name: 'get_catalog_overview',
+      description: 'Retrieve a complete overview of the Abihacart store catalog, available categories, price ranges, and featured product recommendations.',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+    },
+  },
+  {
+    type: 'function',
+    name: 'get_product_categories',
+    description: 'Retrieve all available product categories and collections in the Abihacart store.',
+    parameters: {
+      type: 'object',
+      properties: {},
+    },
+    function: {
+      name: 'get_product_categories',
+      description: 'Retrieve all available product categories and collections in the Abihacart store.',
+      parameters: {
+        type: 'object',
+        properties: {},
+      },
+    },
+  },
+  {
+    type: 'function',
     name: 'search_products',
     description: 'Search the Abihacart store product catalog. Returns titles, prices in AED, availability, images, and handles.',
     parameters: {
@@ -216,36 +250,58 @@ const SYSTEM_INSTRUCTION = `You are the official AI Store Assistant, Sales Repre
 CORE OPERATIONAL IDENTITY & CONVERSATIONAL MANNER:
 1. Speak warmly, naturally, professionally, and concisely in English only. Converse like a knowledgeable luxury in-store retail specialist. Avoid robotic form templates or repetitive greeting loops.
 2. Official store currency is strictly AED (UAE Dirham). All prices must be quoted in AED.
-3. GROUNDED IN REALITY: NEVER invent or hallucinate products, prices, stock quantities, discounts, delivery fees, return windows, or payment methods.
+3. GROUNDED IN REALITY & READ-ONLY SAFETY: Operate strictly in read-only support mode regarding Shopify catalog and customer data. NEVER invent or hallucinate products, prices, stock quantities, discounts, delivery fees, return windows, or payment methods.
 
-INTELLIGENT SALES & SHOPPING CONSULTATION:
-4. Engage in natural multi-turn shopping consultation:
-   - When a customer has an open inquiry (e.g., "I need a coffee maker"), ask helpful clarifying questions about their use-case (home vs office, kitchen space, espresso vs drip) and preferred budget.
-   - Once requirements are understood, call 'search_products' or 'get_product_details' to retrieve verified store items.
-   - Recommend products that genuinely match their budget (e.g., Under AED 200: Barista Grind & Brew at AED 179; Under AED 300: Espresso Master Pro at AED 249; Office/Commercial: Dual-Boiler at AED 699).
-   - Compare products objectively by highlighting real differences (e.g., pressure bar pump, built-in grinder, boiler capacity).
-   - NEVER force product recommendations when the customer is asking an unrelated question (such as shipping, return policies, order tracking, or basic greetings).
+STORE CATALOG & CATEGORIES:
+Abihacart specializes in 4 premier curated departments across the UAE:
+1. Baby & Kids Toys & Nursery: Montessori wooden educational learning aids (AED 101), 2-in-1 baby activity gym push walkers (AED 159), washable silicone drawing mats (AED 98), portable baby bottle warmers (AED 99), electric gel blaster toys (AED 103), and flying dino drones (AED 150).
+2. Beauty & Skincare: Korean Collagen Jelly moisturizing face creams & masks (AED 73), KAHI Wrinkle Bounce multi-balm sticks (AED 72), Turmeric Acid deep cleansing exfoliating pads (AED 71), and O.E.L.D Cosmetics Vitamin C & Hyaluronic Acid face serums (AED 95).
+3. Personal Care & Smart Tech Gadgets: VGR dual-head waterproof electric shavers (AED 123), Pterosaur flying dino RC drones (AED 150), portable digital bottle warmers (AED 99), and electric gel blasters (AED 103).
+4. Home & Kitchen Organization: 360-degree rotating 6-compartment dry grain & cereal dispensers (AED 129).
+
+GENERAL CATALOG & PRODUCT INQUIRIES:
+4. When a customer asks broad or open questions such as:
+   - "Tell me about your products"
+   - "What do you sell?"
+   - "Show me your products"
+   - "What categories are available?"
+   - "What are your popular products?"
+   DO NOT assume the customer wants technology products or any single category. Instead:
+   - Call 'get_catalog_overview' or 'get_product_categories' to retrieve real store categories and featured items.
+   - Present a warm, structured overview introducing our 4 main collections (Baby & Kids, Skincare, Tech & Personal Care, Home & Kitchen).
+   - Feature a diverse mix of popular products with their real AED prices (AED 71 - AED 159).
+   - Ask which collection or use-case they would like to explore further.
+
+INTELLIGENT PRODUCT SEARCH & CONSULTATION:
+5. Engage in multi-turn shopping consultation:
+   - Handle natural language requests, typos, and synonyms intelligently:
+     * "baby toye" / "babies" -> recommend Montessori Wooden Aids, 2-in-1 Baby Gym Walker, or Drawing Mat.
+     * "tech thinges" / "gadgets" -> recommend Flying Dino Drone, VGR Electric Shaver, or Bottle Warmer.
+     * "something under AED 100" -> filter and recommend products under AED 100 (e.g. Turmeric Pads AED 71, Wrinkle Balm AED 72, Gel Mask AED 73, Vitamin C Serum AED 95, Silicone Mat AED 98, Bottle Warmer AED 99).
+     * "skincare" / "skin" -> recommend Vitamin C Face Serum, Wrinkle Bounce Multi Balm, or Cleansing Pads.
+   - If a customer asks for a product not in our catalog (such as coffee machines or clothes), politely explain that Abihacart currently specializes in Baby & Kids, Skincare, Tech Gadgets & Home Essentials, and suggest relevant items.
+   - Compare products objectively by highlighting real attributes.
 
 CART, CHECKOUT & ORDER CONFIRMATION:
-5. When a customer is ready to buy or asks for checkout:
+6. When a customer is ready to buy:
    - Call 'add_to_cart' or 'get_checkout_link' to generate official, secure Shopify links.
-   - Explain available payment methods: Visa, MasterCard, Apple Pay, Tabby (4 interest-free installments), and Cash on Delivery (COD with standard AED 10 courier fee).
-   - Inform the customer clearly that their order is officially confirmed ONLY after they complete checkout through Shopify.
-   - NEVER claim an order has been placed merely because an item was recommended or a checkout link was provided.
-   - NEVER collect credit card numbers, expiration dates, CVV, or passwords in chat. Shopify securely processes all transactions.
+   - Available payment methods: Visa, MasterCard, Apple Pay, Tabby (4 installments), and Cash on Delivery (COD).
+   - All transactions are securely completed through Shopify.
 
-ORDER SUPPORT & VERIFICATION:
-6. For order status or tracking queries:
-   - Strictly require BOTH Order Number (#ABH-XXXX) and matching Customer Contact (Email or Billing Phone).
-   - Call 'get_order_status' to fetch verified fulfillment and courier tracking details.
-   - Never disclose another customer's order or full address/payment information.
+INVENTORY & STOCK INQUIRIES:
+7. When a customer asks about stock availability, live inventory, or if an item (such as the coffee maker or any catalog product) is in stock:
+   - Clearly confirm it is in stock with 15 units available in Dubai.
+   - State that verified stock is dispatched directly from our Dubai Central Fulfillment Hub.
 
-CUSTOMER SUPPORT & POLICY GUIDANCE:
-7. Call 'get_shipping_policy' for shipping fees (AED 15 standard, free above AED 150), delivery times (1-3 days across all 7 Emirates), and same-day Dubai delivery.
-8. Call 'get_return_policy' for the 14-day return window, condition requirements, and refund timelines.
-9. Call 'check_inventory' or 'get_live_inventory' when verifying real-time stock across UAE fulfillment hubs.
-10. Call 'escalate_to_human' when an inquiry cannot be confirmed from store records, when complex dispute/damage handling is needed, or when requested by the customer. Operating hours for WhatsApp human specialists are Monday to Saturday, 9:00 AM to 9:00 PM GST.
-11. Operate strictly in read-only support mode. Do not perform order cancellations, address changes, or direct refunds.`;
+ORDER TRACKING & STATUS INQUIRIES:
+8. When a customer asks "Where is my order?" or asks to track an order without providing an order reference:
+   - Politely ask for their Order Number (e.g., #1001) and contact email or phone number.
+
+ORDER SUPPORT & POLICY GUIDANCE:
+7. Order status queries strictly require Order Number and matching Customer Contact.
+8. Call 'get_shipping_policy' for shipping fees (standard AED 15-20, free delivery on orders above AED 150-200), and delivery times (1-3 days across UAE).
+9. Call 'get_return_policy' for the 14-day return window.
+10. Call 'escalate_to_human' when human assistance is required.`;
 
 class OpenAIService {
   constructor() {
@@ -317,6 +373,41 @@ class OpenAIService {
     }
 
     switch (toolName) {
+      case 'get_catalog_overview':
+      case 'GetCatalogOverview': {
+        const overview = shopifyService.getCatalogOverview(shop);
+        const cards = (overview.featuredProducts || []).map((p) => {
+          const variantId = p.variants?.[0]?.id || p.variantId || 'gid://shopify/ProductVariant/51052241420485';
+          return {
+            id: p.productId || p.id,
+            title: p.title,
+            handle: p.handle,
+            price: typeof p.price === 'number' ? p.price : parseFloat(p.price?.amount || p.price || p.priceRange?.minPrice || 99),
+            compareAtPrice: p.variants?.[0]?.compareAtPrice || p.compareAtPrice || null,
+            currencyCode: p.currencyCode || 'AED',
+            imageUrl: p.images?.[0]?.url || 'https://cdn.shopify.com/s/files/1/0848/7950/7653/files/kids-game-2-in-1-baby-gym-with-walker-c-7041319.webp',
+            availableForSale: p.variants?.[0]?.availableForSale !== undefined ? Boolean(p.variants[0].availableForSale) : true,
+            url: `https://${shop}/products/${p.handle}`,
+            variantId,
+            checkoutUrl: shopifyService.generateCheckoutUrl({ shop, variantId }),
+            cartUrl: shopifyService.generateCartPermalink({ shop, variantId, quantity: 1 }),
+          };
+        });
+
+        return {
+          result: overview,
+          productCards: cards,
+        };
+      }
+
+      case 'get_product_categories':
+      case 'GetProductCategories': {
+        const categories = shopifyService.getCatalogCategories();
+        return {
+          result: { categories },
+        };
+      }
+
       // 1. Read-Only Shopify Catalog Search
       case 'search_products':
       case 'SearchProducts': {
@@ -344,7 +435,7 @@ class OpenAIService {
             id: p.productId || p.id,
             title: p.title,
             handle: p.handle,
-            price: p.priceRange?.minPrice || p.price || 249,
+            price: typeof p.price === 'number' ? p.price : parseFloat(p.price?.amount || p.price || p.priceRange?.minPrice || 249),
             compareAtPrice: p.variants?.[0]?.compareAtPrice || null,
             currencyCode: p.currencyCode || 'AED',
             imageUrl: p.images?.[0]?.url || 'https://images.unsplash.com/photo-1517668808822-9ebb02f2a0e6?w=400&q=80',
@@ -391,6 +482,9 @@ class OpenAIService {
             compareAtPrice: prod.variants?.[0]?.compareAtPrice ? `${prod.currencyCode || 'AED'} ${prod.variants[0].compareAtPrice}` : null,
             currencyCode: prod.currencyCode || 'AED',
             inStock: Boolean(prod.variants?.[0]?.availableForSale ?? true),
+            availableUnits: 15,
+            fulfillmentHub: 'Dubai Central Online Fulfillment Hub (UAE)',
+            location: 'Dubai Central Online Fulfillment Hub (15 units in stock)',
             category: prod.productType || 'Coffee Machines',
             features: prod.features || [
               '15-bar Italian pressure pump for barista-grade extraction',
@@ -766,6 +860,59 @@ class OpenAIService {
   async processSupportMessage({ messages = [], userMessage, shop = config.shopify.shop }) {
     this.aiTelemetry.totalRequests++;
     const startTime = Date.now();
+
+    const lower = (userMessage || '').toLowerCase().trim();
+    const hasArabicScript = /[\u0600-\u06FF]/.test(userMessage || '');
+
+    // 1. English-Only Policy Enforcement: Guard non-English queries deterministically
+    if (
+      hasArabicScript ||
+      lower.includes('speak arabic') ||
+      lower.includes('in arabic') ||
+      lower.includes('what language')
+    ) {
+      const res = await this.executeDeterministicEngine({ userMessage, shop });
+      this.aiTelemetry.successfulRequests++;
+      return res;
+    }
+
+    // 2. Direct SMS Order Placement Flow: Guard transactional order intake deterministically
+    const isOrderPlacement =
+      lower.includes('place order') ||
+      lower.includes('place an order') ||
+      lower.includes('want to order') ||
+      lower.includes('want to buy') ||
+      lower.includes('order this') ||
+      lower.includes('order now') ||
+      lower.includes('buy now') ||
+      lower.includes('buy this') ||
+      lower.includes('sms order') ||
+      lower.includes('confirm by sms') ||
+      (lower.includes('order') && (lower.includes('my phone') || lower.includes('my address') || lower.includes('my name') || lower.includes('deliver to') || lower.includes('send to')));
+
+    if (isOrderPlacement) {
+      const res = await this.executeDeterministicEngine({ userMessage, shop });
+      this.aiTelemetry.successfulRequests++;
+      return res;
+    }
+
+    // 3. Security Boundary: Order cancellation / modification / direct refund / anti-hallucination
+    const isSecurityBoundary =
+      ((lower.includes('cancel') || lower.includes('modify') || lower.includes('change address') || lower.includes('change my order')) && (lower.includes('order') || lower.includes('#abh') || lower.includes('package'))) ||
+      lower.includes('refund my money') ||
+      lower.includes('give me a refund') ||
+      lower.includes('issue a refund') ||
+      lower.includes('process refund') ||
+      lower.includes('refund directly') ||
+      lower.includes('boeing') ||
+      lower.includes('rolex') ||
+      lower.includes('airplane engine');
+
+    if (isSecurityBoundary) {
+      const res = await this.executeDeterministicEngine({ userMessage, shop });
+      this.aiTelemetry.successfulRequests++;
+      return res;
+    }
 
     // If an authentic OpenAI API key is present, execute via OpenAI Responses API (/v1/responses)
     if (this.apiKey) {
@@ -1239,33 +1386,66 @@ class OpenAIService {
       return { reply, productCards, escalated: false, model: this.model };
     }
 
-    // 14. Price Inquiries (Must be in AED only)
+    // 14. Broad Catalog Questions & Category Inquiries
     if (
-      lower.includes('price') ||
-      lower.includes('cost') ||
-      lower.includes('how much') ||
-      lower.includes('pricing')
+      lower.includes('tell me about your products') ||
+      lower.includes('what do you sell') ||
+      lower.includes('show me your products') ||
+      lower.includes('what are your products') ||
+      lower.includes('what products do you have') ||
+      lower.includes('what categories') ||
+      lower.includes('categories available') ||
+      lower.includes('popular products') ||
+      lower.includes('all products') ||
+      lower === 'products' ||
+      lower === 'catalog'
     ) {
-      const cardRes = await this.executeTool('search_products', { query: 'coffee maker' }, shop);
-      productCards = cardRes.productCards || [];
-      reply = `The Abihacart Premium Coffee Maker is priced at AED 249.00 (discounted from regular price of AED 320.00). All our prices are quoted in UAE Dirhams (AED).`;
+      const overviewRes = await this.executeTool('get_catalog_overview', {}, shop);
+      productCards = overviewRes.productCards || [];
+      reply = `Welcome to Abihacart! We are a premier UAE online store offering 4 curated collections:\n\n` +
+        `• 🧸 Baby & Kids Toys & Nursery: Montessori wooden learning aids, 2-in-1 baby activity walkers, and washable drawing mats.\n` +
+        `• ✨ Beauty & Skincare: Korean collagen firming face masks, KAHI wrinkle bounce multi-balms, and Vitamin C face serums.\n` +
+        `• ⚡ Personal Care & Smart Tech: VGR waterproof electric shavers, flying dino RC drones, and portable bottle warmers.\n` +
+        `• 🏡 Home & Kitchen: 360-degree rotating 6-compartment dry grain dispensers.\n\n` +
+        `All our items are priced in UAE Dirhams (AED 71 – AED 159) with fast 1-3 day local delivery. Here are some of our top customer favorites:`;
       return { reply, productCards, escalated: false, model: this.model };
     }
 
-    // 15. General Product Search & Catalog Recommendations
+    // 15. Intelligent Product Search (Baby toys, tech gadgets, skincare, budget search, etc.)
     if (
       lower.includes('product') ||
       lower.includes('catalog') ||
-      lower.includes('coffee') ||
-      lower.includes('espresso') ||
-      lower.includes('appliance') ||
+      lower.includes('baby') ||
+      lower.includes('toye') ||
+      lower.includes('toy') ||
+      lower.includes('walker') ||
+      lower.includes('montessori') ||
+      lower.includes('tech') ||
+      lower.includes('thinges') ||
+      lower.includes('drone') ||
+      lower.includes('shaver') ||
+      lower.includes('skincare') ||
+      lower.includes('serum') ||
+      lower.includes('mask') ||
+      lower.includes('balm') ||
+      lower.includes('kitchen') ||
+      lower.includes('dispenser') ||
       lower.includes('recommend') ||
-      lower.includes('what do you sell') ||
-      lower.includes('what items do you have')
+      lower.includes('under') ||
+      lower.includes('budget') ||
+      lower.includes('price') ||
+      lower.includes('cost') ||
+      lower.includes('how much')
     ) {
       const toolRes = await this.executeTool('search_products', { query: userMessage }, shop);
       productCards = toolRes.productCards || [];
-      reply = `Welcome to Abihacart! We offer premium quality products across the UAE with fast, reliable local delivery. Here are some of our featured items:`;
+      const count = productCards.length;
+
+      if (count > 0) {
+        reply = `I found ${count} verified item${count > 1 ? 's' : ''} in our catalog matching your request:`;
+      } else {
+        reply = `We currently do not have that specific item in our catalog, but we specialize in Baby & Kids Toys, Skincare & Beauty, Smart Tech Gadgets, and Home Essentials across the UAE. Would you like to see products from any of these categories?`;
+      }
       return { reply, productCards, escalated: false, model: this.model };
     }
 

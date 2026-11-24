@@ -1,0 +1,197 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Abihacart — AI Customer Support Concierge</title>
+  <link rel="stylesheet" href="css/widget.css">
+  <style>
+    :root {
+      --brand-dark: #141414;
+      --brand-cream: #faf8f5;
+      --brand-gold: #b89a63;
+      --brand-border: #e8e5df;
+    }
+    * {
+      box-sizing: border-box;
+      margin: 0;
+      padding: 0;
+    }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      background: #faf8f5;
+      color: #141414;
+      line-height: 1.5;
+      -webkit-font-smoothing: antialiased;
+      min-height: 100vh;
+      display: flex;
+      flex-direction: column;
+    }
+    /* Minimal Top Notice */
+    .top-bar {
+      background: #141414;
+      color: #faf8f5;
+      font-size: 11px;
+      letter-spacing: 0.12em;
+      text-transform: uppercase;
+      text-align: center;
+      padding: 9px 16px;
+      border-bottom: 1px solid rgba(184, 154, 99, 0.25);
+    }
+    .top-bar span {
+      color: #b89a63;
+      font-weight: 600;
+    }
+    /* Minimal Clean Header - No Navbar Links */
+    .store-nav {
+      background: #ffffff;
+      border-bottom: 1px solid #e8e5df;
+      padding: 18px 40px;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+    .brand-logo {
+      font-size: 20px;
+      font-weight: 800;
+      letter-spacing: 0.18em;
+      text-transform: uppercase;
+      color: #141414;
+      display: flex;
+      align-items: center;
+      gap: 6px;
+    }
+    .brand-logo span {
+      color: #b89a63;
+      font-size: 14px;
+    }
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: #f7f4ee;
+      border: 1px solid rgba(184, 154, 99, 0.4);
+      color: #786134;
+      padding: 6px 14px;
+      border-radius: 9999px;
+      font-size: 11.5px;
+      font-weight: 600;
+      letter-spacing: 0.04em;
+      text-transform: uppercase;
+    }
+    /* Clean Hero Section - Zero Images */
+    .hero-container {
+      max-width: 960px;
+      margin: 60px auto 40px auto;
+      padding: 0 24px;
+      flex: 1;
+      width: 100%;
+    }
+    .hero-card {
+      background: #ffffff;
+      border: 1px solid #e8e5df;
+      border-radius: 20px;
+      padding: 56px 48px;
+      text-align: center;
+      box-shadow: 0 4px 20px -4px rgba(0, 0, 0, 0.05);
+    }
+    .hero-tagline {
+      font-size: 12px;
+      letter-spacing: 0.16em;
+      text-transform: uppercase;
+      color: #b89a63;
+      font-weight: 700;
+      margin-bottom: 12px;
+    }
+    .hero-card h1 {
+      font-size: 36px;
+      font-weight: 700;
+      letter-spacing: -0.5px;
+      line-height: 1.2;
+      margin-bottom: 16px;
+      color: #141414;
+    }
+    .hero-card p {
+      font-size: 16px;
+      color: #555555;
+      max-width: 620px;
+      margin: 0 auto 32px auto;
+      line-height: 1.6;
+    }
+    .hero-cta {
+      display: inline-flex;
+      align-items: center;
+      gap: 8px;
+      background: #141414;
+      color: #ffffff;
+      padding: 14px 32px;
+      border-radius: 30px;
+      font-size: 13.5px;
+      font-weight: 600;
+      letter-spacing: 0.05em;
+      text-transform: uppercase;
+      text-decoration: none;
+      transition: all 0.2s;
+      cursor: pointer;
+      border: none;
+    }
+    .hero-cta:hover {
+      background: #000000;
+      transform: translateY(-2px);
+      box-shadow: 0 6px 16px rgba(0, 0, 0, 0.15);
+    }
+    @media (max-width: 768px) {
+      .hero-card {
+        padding: 36px 24px;
+      }
+      .hero-card h1 {
+        font-size: 28px;
+      }
+      .store-nav {
+        padding: 14px 20px;
+      }
+    }
+  </style>
+</head>
+<body>
+
+  <div class="top-bar">
+    Complimentary Express UAE Delivery On Orders Above <span>AED 200</span> | Official 1-Year UAE Warranty
+  </div>
+
+  <header class="store-nav">
+    <div class="brand-logo">
+      Abihacart <span>✦</span>
+    </div>
+    <div class="status-badge">
+      <span>●</span> AI Concierge Active
+    </div>
+  </header>
+
+  <main class="hero-container">
+    <section class="hero-card">
+      <div class="hero-tagline">Official Store Assistant</div>
+      <h1>Abihacart AI Customer Support</h1>
+      <p>Intelligent, real-time customer service providing order tracking, catalog assistance, UAE delivery guidelines, and seamless human support escalation.</p>
+      <button class="hero-cta" type="button" onclick="if(window.AbihacartChat) window.AbihacartChat.open();">
+        Open AI Concierge Chat →
+      </button>
+    </section>
+  </main>
+
+  <!-- Mount Point for Chat Widget -->
+  <div id="abihacart-chat-root"></div>
+
+  <!-- Chat Widget Configuration -->
+  <script>
+    window.ABIHACART_CONFIG = {
+      backendUrl: window.ABIHACART_BACKEND_URL || localStorage.getItem('abh_backend_url') || (window.location.hostname === 'localhost' || window.location.hostname === '127.0.0.1' ? 'http://localhost:5000' : ''),
+      shop: 'abihacart.myshopify.com'
+    };
+  </script>
+
+  <!-- Chat Widget Bundle -->
+  <script src="js/widget.js"></script>
+
+</body>
+</html>

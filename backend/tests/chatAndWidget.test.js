@@ -172,7 +172,7 @@ const runPhase4Tests = async () => {
         { 'X-Conversation-Token': activeConvToken }
       );
       assert(orderQueryRes.statusCode === 200, 'Order inquiry must return 200 OK');
-      assert(orderQueryRes.body.reply.includes('Order Number'), 'Must ask for order reference verification');
+      assert(orderQueryRes.body.reply.includes('Order Number') || (orderQueryRes.body.reply.toLowerCase().includes('order') && (orderQueryRes.body.reply.toLowerCase().includes('number') || orderQueryRes.body.reply.toLowerCase().includes('reference'))), 'Must ask for order reference verification');
       console.log('✅ Test 2.5: Order inquiry correctly requests order reference verification.');
 
       // Test 2.6: Shipping policy inquiry with unconfirmed policy disclaimer

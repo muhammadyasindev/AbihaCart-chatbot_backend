@@ -21,6 +21,9 @@ const testSuites = [
   'phase9_11SmsOrderConfirmation.test.js',
   'phase9_12IndependentLiveVerification.test.js',
   'phase9_14ConcurrencyAndFailure.test.js',
+  'phase9_17CatalogAndIntelligence.test.js',
+  'phase9_19OrderConfirmationMvp.test.js',
+  'phase10OrderConfirmationPopup.test.js',
 ];
 
 console.log('======================================================================');
@@ -40,7 +43,7 @@ for (const suite of testSuites) {
   const startSuite = Date.now();
   const res = spawnSync(process.execPath, [suitePath], {
     stdio: 'inherit',
-    env: process.env,
+    env: { ...process.env, NODE_ENV: 'test', TEST_MODE: 'true' },
   });
   const duration = ((Date.now() - startSuite) / 1000).toFixed(2);
 
