@@ -182,27 +182,40 @@ const handleCallback = async (req, res, next) => {
     const cookieValid = cookieMatches && !cookieExpired;
 
     if (!storeCheck.matched && !cookieValid) {
-      if (storeCheck.expired || cookieExpired) {
-        logger.warn(`OAuth state expired for shop: ${shop}`);
-        return res.status(403).json({
-          status: 'fail',
-          error: 'Forbidden',
-          message: 'OAuth state nonce has expired. Please restart the authorization flow.',
-        });
-      }
-
-      logger.warn(`Security alert: State mismatch or session not found for shop: ${shop}`, {
+      const diagnostics = {
+        dbConnected: SessionStore.isDBConnected(),
         hasSession: Boolean(storeCheck.session),
         hasStoredState: Boolean(storeCheck.session?.state),
         pendingStateCount: Array.isArray(storeCheck.session?.pendingStates)
           ? storeCheck.session.pendingStates.length
           : 0,
+        hasAccessToken: Boolean(storeCheck.session?.accessToken),
+        stateExpiredInStore: Boolean(storeCheck.expired),
         hasStateCookie: Boolean(cookies[OAUTH_STATE_COOKIE]),
-      });
+        cookieSignatureValid: Boolean(cookieCheck.valid),
+        cookieShopMatches: Boolean(cookieCheck.valid && cookieCheck.shop === shop),
+        cookieStateMatches: Boolean(cookieCheck.valid && cookieCheck.state === state),
+        cookieExpired: Boolean(cookieExpired),
+      };
+
+      if (storeCheck.expired || cookieExpired) {
+        logger.warn(`OAuth state expired for shop: ${shop}`, diagnostics);
+        return res.status(403).json({
+          status: 'fail',
+          error: 'Forbidden',
+          message: 'OAuth state nonce has expired. Please restart the authorization flow.',
+          restartAuthUrl: `${config.urls.backendUrl}/api/shopify/auth?shop=${encodeURIComponent(shop)}`,
+          diagnostics,
+        });
+      }
+
+      logger.warn(`Security alert: State mismatch or session not found for shop: ${shop}`, diagnostics);
       return res.status(403).json({
         status: 'fail',
         error: 'Forbidden',
         message: 'Invalid state nonce. CSRF validation failed.',
+        restartAuthUrl: `${config.urls.backendUrl}/api/shopify/auth?shop=${encodeURIComponent(shop)}`,
+        diagnostics,
       });
     }
 

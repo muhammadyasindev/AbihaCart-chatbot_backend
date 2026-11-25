@@ -143,12 +143,17 @@ class SessionStore {
     const nowMs = Date.now();
     const existing = await this.findByShop(normalizedShop);
     const currentPending = Array.isArray(existing?.pendingStates)
-      ? existing.pendingStates.filter((entry) => entry && entry.state && new Date(entry.expiresAt).getTime() > nowMs)
+      ? existing.pendingStates
+        .filter((entry) => entry && entry.state && new Date(entry.expiresAt).getTime() > nowMs)
+        .map((entry) => ({
+          state: String(entry.state),
+          expiresAt: new Date(entry.expiresAt),
+        }))
       : [];
 
     const nextPending = [
       ...currentPending.filter((entry) => entry.state !== state),
-      { state, expiresAt: stateExpiresAt },
+      { state: String(state), expiresAt: new Date(stateExpiresAt) },
     ].slice(-10);
 
     // Mirror to in-memory cache as well so transient DB disconnects during OAuth still resolve

@@ -275,8 +275,12 @@ const runAllTests = async () => {
       const forgedStateRes = await fetchJSON(`http://localhost:${testPort}/api/shopify/auth/callback?${forgedQs}`);
       assert(forgedStateRes.statusCode === 403, `Forged state must return 403, got ${forgedStateRes.statusCode}`);
       assert(
-        forgedStateRes.body.message === 'Invalid state nonce. CSRF validation failed.',
-        'Forged state must fail CSRF validation'
+        forgedStateRes.body.message === 'Invalid state nonce. CSRF validation failed.' &&
+        forgedStateRes.body.diagnostics &&
+        typeof forgedStateRes.body.diagnostics.dbConnected === 'boolean' &&
+        typeof forgedStateRes.body.diagnostics.hasStateCookie === 'boolean' &&
+        Boolean(forgedStateRes.body.restartAuthUrl),
+        'Forged state must fail CSRF validation with safe diagnostics and restart URL'
       );
       console.log('✅ Test 7.1-7.2 Passed: Redirect URI normalization and forged-state 403 defense verified.');
 

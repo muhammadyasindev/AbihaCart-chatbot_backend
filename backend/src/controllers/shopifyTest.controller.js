@@ -48,6 +48,13 @@ const testShopifyConnection = async (req, res, next) => {
         message: 'Shopify Client ID and Client Secret are present, but the store has not completed the OAuth Authorization Code flow.',
         distribution: 'Custom Distribution / Standalone App',
         requiredScopes: config.shopify.scopes,
+        oauthDiagnostics: {
+          dbConnected: SessionStore.isDBConnected(),
+          hasSessionRecord: Boolean(session),
+          hasStoredState: Boolean(session?.state),
+          pendingStateCount: Array.isArray(session?.pendingStates) ? session.pendingStates.length : 0,
+          stateExpiresAt: session?.stateExpiresAt || null,
+        },
         authFlow: {
           step: 'Initiate OAuth Handshake',
           initiateUrl: `${config.urls.backendUrl}/api/shopify/auth?shop=${shop}`,
