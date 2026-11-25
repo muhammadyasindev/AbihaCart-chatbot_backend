@@ -161,22 +161,45 @@ class ShopifyService {
     const targetShop = (session && session.canonicalShop) || shop;
     const endpoint = `https://${targetShop}/admin/api/${this.apiVersion}/graphql.json`;
 
+    const headers = {
+      'Content-Type': 'application/json',
+      Accept: 'application/json',
+      'User-Agent': 'Abihacart-AI-Support/1.0',
+      'X-Shopify-Access-Token': accessToken,
+    };
+
     try {
       const response = await fetch(endpoint, {
         method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          Accept: 'application/json',
-          'X-Shopify-Access-Token': accessToken,
-        },
+        headers,
         body: JSON.stringify({ query, variables }),
       });
 
       // Handle HTTP 401/403 Unauthorized or Forbidden
       if (response.status === 401 || response.status === 403) {
         const errorText = await response.text();
+        let shopifyReason = '';
+        try {
+          const parsed = JSON.parse(errorText);
+          shopifyReason = typeof parsed.errors === 'string'
+            ? parsed.errors
+            : JSON.stringify(parsed.errors || parsed.error || parsed);
+        } catch {
+          shopifyReason = String(errorText || '')
+            .replace(/<[^>]+>/g, ' ')
+            .replace(/\s+/g, ' ')
+            .trim()
+            .slice(0, 200);
+        }
+        shopifyReason = shopifyReason.replace(/shp(at|ss|rf|ca|pa)_[A-Za-z0-9_-]+/g, '[REDACTED]');
+
         logger.error(`Shopify authentication/authorization failure (${response.status}): ${errorText}`);
-        throw new Error(`Shopify API authorization error (${response.status}). Token may be invalid or missing required scopes.`);
+        const err = new Error(
+          `Shopify API authorization error (${response.status}).${shopifyReason ? ` Reason: ${shopifyReason}` : ' Token may be invalid or missing required scopes.'}`
+        );
+        err.statusCode = response.status;
+        err.shopifyReason = shopifyReason;
+        throw err;
       }
 
       // Handle HTTP 429 Too Many Requests (Rate limit / Throttling)

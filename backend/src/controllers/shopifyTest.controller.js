@@ -9,6 +9,7 @@ const { SessionStore } = require('../models/ShopifySession');
  * GET /api/shopify/test-connection
  */
 const testShopifyConnection = async (req, res, next) => {
+  let session = null;
   try {
     const rawShop = req.query.shop || config.shopify.shop;
     const shop = sanitizeShopDomain(rawShop);
@@ -39,7 +40,7 @@ const testShopifyConnection = async (req, res, next) => {
     }
 
     // Check if an authorized session exists in session store
-    const session = await SessionStore.findByShop(shop);
+    session = await SessionStore.findByShop(shop);
 
     if (!session || !session.accessToken) {
       return res.status(200).json({
@@ -84,6 +85,11 @@ const testShopifyConnection = async (req, res, next) => {
       statusCode: 502,
       error: 'Shopify API Error',
       message: error.message,
+      apiVersion: config.shopify.apiVersion,
+      ...(session ? {
+        canonicalShop: session.canonicalShop || null,
+        session: session.toSafeObject(),
+      } : {}),
     });
   }
 };

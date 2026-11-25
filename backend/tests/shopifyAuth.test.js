@@ -432,6 +432,30 @@ const runAllTests = async () => {
           `Cookie-less canonical domain alias callback must succeed via fallbackShops, got ${noCookieCbRes.statusCode}`
         );
         console.log('✅ Test 7.8 Passed: Cookie-less canonical alias lookup verified.');
+
+        // Test 7.9: Shopify 403/401 error redacts tokens and surfaces safe diagnostics in /test-connection
+        const origFetch = global.fetch;
+        global.fetch = async () => ({
+          ok: false,
+          status: 403,
+          text: async () => JSON.stringify({ errors: 'Requires read_products scope; secret shpat_leak_123' }),
+        });
+        try {
+          const failConnRes = await fetchJSON(`http://localhost:${testPort}/api/shopify/test-connection?shop=abihacart.myshopify.com`);
+          assert(failConnRes.statusCode === 502, `Expected 502 on Shopify 403, got ${failConnRes.statusCode}`);
+          assert(
+            failConnRes.body.message.includes('Requires read_products scope') &&
+            !failConnRes.body.message.includes('shpat_leak_123') &&
+            failConnRes.body.message.includes('[REDACTED]') &&
+            failConnRes.body.session &&
+            failConnRes.body.session.accessToken === undefined &&
+            failConnRes.body.canonicalShop === 'dwpaps-9q.myshopify.com',
+            'test-connection 502 must include safe Shopify reason & session metadata without token leaks'
+          );
+          console.log('✅ Test 7.9 Passed: Sanitized 403 diagnostics and token redaction verified.');
+        } finally {
+          global.fetch = origFetch;
+        }
       } finally {
         shopifyService.exchangeCodeForToken = origExchange;
         SessionStore.clearMemory();
