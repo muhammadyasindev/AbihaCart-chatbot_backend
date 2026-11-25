@@ -4,6 +4,7 @@
  */
 const assert = require('assert');
 const http = require('http');
+const vm = require('vm');
 
 process.env.NODE_ENV = 'test';
 process.env.TEST_MODE = 'true';
@@ -460,11 +461,351 @@ async function run() {
       'Popup JS must not contain hardcoded http://localhost:5000'
     );
     assert.ok(
-      popupRes.raw.includes('parseJsonApiResponse') && popupRes.raw.includes('!res.ok'),
+      popupRes.raw.includes('parseJsonApiResponse') && popupRes.raw.includes('ok: res.ok'),
       'Popup JS must validate HTTP status before treating response as success'
     );
 
     console.log('✅ Suite 4 Passed: Popup script asset verified.');
+
+    // -----------------------------------------------------------------------
+    // 5. Executed Popup Script (VM DOM) Token Retrieval, Duplicate & Error Flows
+    // -----------------------------------------------------------------------
+    console.log('\n--- Suite 5: Popup Script Execution (Token Retrieval, Payload & Error Flows) ---');
+
+    const createPopupDomHarness = ({ checkoutObj, fetchHandler }) => {
+      const elementsById = new Map();
+
+      class MockElement {
+        constructor(tagName = 'div') {
+          this.tagName = tagName.toUpperCase();
+          this.id = '';
+          this.className = '';
+          this.style = { cssText: '' };
+          this.dataset = { backendUrl: `http://127.0.0.1:${port}` };
+          this.disabled = false;
+          this.children = [];
+          this.listeners = {};
+          this.attributes = {};
+          this._innerHTML = '';
+          this._textContent = '';
+          this.classList = {
+            _set: new Set(),
+            add: (...cls) => cls.forEach((c) => this.classList._set.add(c)),
+            remove: (...cls) => cls.forEach((c) => this.classList._set.delete(c)),
+            contains: (c) => this.classList._set.has(c),
+          };
+        }
+
+        set innerHTML(html) {
+          this._innerHTML = String(html || '');
+          const idMatches = [...this._innerHTML.matchAll(/id=["']([^"']+)["']/g)];
+          for (const m of idMatches) {
+            const child = new MockElement('div');
+            child.id = m[1];
+            child._parent = this;
+            elementsById.set(child.id, child);
+          }
+        }
+
+        get innerHTML() {
+          return this._innerHTML;
+        }
+
+        set textContent(val) {
+          this._textContent = String(val || '');
+        }
+
+        get textContent() {
+          return this._textContent;
+        }
+
+        setAttribute(k, v) {
+          this.attributes[k] = v;
+        }
+
+        appendChild(child) {
+          if (child && child.id) elementsById.set(child.id, child);
+          this.children.push(child);
+          return child;
+        }
+
+        prepend(child) {
+          if (child && child.id) elementsById.set(child.id, child);
+          this.children.unshift(child);
+          return child;
+        }
+
+        remove() {
+          if (this.id) elementsById.delete(this.id);
+        }
+
+        querySelector(sel) {
+          if (sel && sel.startsWith('#')) {
+            return elementsById.get(sel.slice(1)) || null;
+          }
+          return null;
+        }
+
+        addEventListener(type, fn) {
+          if (!this.listeners[type]) this.listeners[type] = [];
+          this.listeners[type].push(fn);
+        }
+
+        async clickAsync() {
+          const handlers = this.listeners.click || [];
+          for (const fn of handlers) {
+            await fn({ target: this, preventDefault: () => {} });
+          }
+        }
+      }
+
+      const rootEl = new MockElement('div');
+      rootEl.id = 'abihacart-order-confirmation-root';
+      elementsById.set(rootEl.id, rootEl);
+
+      const mockDocument = {
+        readyState: 'complete',
+        head: new MockElement('head'),
+        body: new MockElement('body'),
+        currentScript: null,
+        getElementById: (id) => elementsById.get(id) || null,
+        createElement: (tag) => new MockElement(tag),
+        addEventListener: () => {},
+      };
+
+      const mockWindow = {
+        location: { search: '' },
+        Shopify: { checkout: checkoutObj },
+        document: mockDocument,
+        ABIHACART_CONFIG: { backendUrl: `http://127.0.0.1:${port}` },
+      };
+
+      const sandbox = {
+        window: mockWindow,
+        document: mockDocument,
+        fetch: fetchHandler,
+        URL,
+        URLSearchParams,
+        requestAnimationFrame: (fn) => fn(),
+        console,
+      };
+      mockWindow.window = mockWindow;
+
+      vm.runInNewContext(popupRes.raw, sandbox);
+      return { elementsById, mockWindow };
+    };
+
+    const proxyToTestServerFetch = (recorder) => async (url, init = {}) => {
+      recorder.push({ url, method: init.method || 'GET', body: init.body ? JSON.parse(init.body) : null });
+      const parsed = new URL(url);
+      const res = await sendRequest(
+        port,
+        init.method || 'GET',
+        `${parsed.pathname}${parsed.search}`,
+        init.headers || {},
+        init.body ? JSON.parse(init.body) : null
+      );
+      return {
+        ok: res.status >= 200 && res.status < 300,
+        status: res.status,
+        json: async () => res.json,
+        text: async () => res.raw,
+      };
+    };
+
+    // 5a. Cancel via popup with Shopify co.token present + duplicate double-click prevention
+    const tokenC = ShopifyOrderConfirmationStore.generateToken('987654321003', 60);
+    await ShopifyOrderConfirmationStore.create({
+      shopifyOrderId: '987654321003',
+      orderNumber: '#9003',
+      shop: 'abihacart.myshopify.com',
+      customerName: 'Charlie Test',
+      customerEmail: 'charlie@example.com',
+      customerPhone: '+971500000003',
+      totalPrice: '310.00',
+      currency: 'AED',
+      lineItems: [{ title: 'Desert Oud', quantity: 1, price: '310.00' }],
+      confirmationToken: tokenC.token,
+      confirmationTokenHash: tokenC.tokenHash,
+      tokenExpiresAt: tokenC.expiresAt,
+      status: 'pending',
+    });
+
+    const cancelPopupCalls = [];
+    const harnessCancel = createPopupDomHarness({
+      checkoutObj: {
+        order_id: 'gid://shopify/Order/987654321003',
+        order_number: 9003,
+        email: 'charlie@example.com',
+        token: 'shopify_checkout_token_not_abihacart_999',
+      },
+      fetchHandler: proxyToTestServerFetch(cancelPopupCalls),
+    });
+
+    await new Promise((r) => setTimeout(r, 30));
+
+    assert.strictEqual(cancelPopupCalls.length, 1, 'Init must call status endpoint once');
+    assert.ok(
+      cancelPopupCalls[0].url.includes('/api/orders/checkout-confirmation-status') &&
+      !cancelPopupCalls[0].url.includes('shopify_checkout_token_not_abihacart_999'),
+      'Status query must NOT send Shopify checkout.token as Abihacart confirmation token'
+    );
+
+    const openCancelBtn = harnessCancel.elementsById.get('abh-cancel-btn');
+    assert.ok(openCancelBtn, 'Popup cancel button must render when status returns status=success');
+    await openCancelBtn.clickAsync();
+
+    const confirmCancelBtn = harnessCancel.elementsById.get('abh-confirm-cancel-btn');
+    assert.ok(confirmCancelBtn, 'Confirmation safeguard cancel button must render');
+
+    // Trigger rapid duplicate clicks simultaneously
+    await Promise.all([
+      confirmCancelBtn.clickAsync(),
+      confirmCancelBtn.clickAsync(),
+    ]);
+
+    const postCancelCalls = cancelPopupCalls.filter((c) => c.url.endsWith('/api/orders/cancel-shopify-order'));
+    assert.strictEqual(postCancelCalls.length, 1, 'Duplicate clicks must send exactly ONE cancellation POST request');
+    assert.strictEqual(postCancelCalls[0].body.token, tokenC.token, 'Cancel POST must send signed confirmationToken');
+    assert.strictEqual(postCancelCalls[0].body.orderId, '987654321003', 'Cancel POST must include orderId');
+    assert.ok(postCancelCalls[0].body.reason, 'Cancel POST must include reason');
+
+    const checkC = await ShopifyOrderConfirmationStore.findByShopifyOrderId('987654321003');
+    assert.strictEqual(checkC.status, 'cancelled', 'Order 987654321003 must be cancelled via popup');
+
+    // 5b. Confirm via popup with duplicate protection + exact payload
+    const tokenD = ShopifyOrderConfirmationStore.generateToken('987654321004', 60);
+    await ShopifyOrderConfirmationStore.create({
+      shopifyOrderId: '987654321004',
+      orderNumber: '#9004',
+      shop: 'abihacart.myshopify.com',
+      customerName: 'Dana Test',
+      customerEmail: 'dana@example.com',
+      customerPhone: '+971500000004',
+      totalPrice: '420.00',
+      currency: 'AED',
+      lineItems: [{ title: 'Silk Abaya', quantity: 1, price: '420.00' }],
+      confirmationToken: tokenD.token,
+      confirmationTokenHash: tokenD.tokenHash,
+      tokenExpiresAt: tokenD.expiresAt,
+      status: 'pending',
+    });
+
+    const confirmPopupCalls = [];
+    const harnessConfirm = createPopupDomHarness({
+      checkoutObj: {
+        order_id: 'gid://shopify/Order/987654321004',
+        order_number: 9004,
+        email: 'dana@example.com',
+      },
+      fetchHandler: proxyToTestServerFetch(confirmPopupCalls),
+    });
+    await new Promise((r) => setTimeout(r, 30));
+
+    const confirmBtnD = harnessConfirm.elementsById.get('abh-confirm-btn');
+    await Promise.all([
+      confirmBtnD.clickAsync(),
+      confirmBtnD.clickAsync(),
+    ]);
+
+    const postConfirmCalls = confirmPopupCalls.filter((c) => c.url.endsWith('/api/orders/confirm-shopify-order'));
+    assert.strictEqual(postConfirmCalls.length, 1, 'Duplicate confirm clicks must send exactly ONE POST request');
+    assert.strictEqual(postConfirmCalls[0].body.token, tokenD.token);
+    assert.strictEqual(postConfirmCalls[0].body.orderId, '987654321004');
+    const checkD = await ShopifyOrderConfirmationStore.findByShopifyOrderId('987654321004');
+    assert.strictEqual(checkD.status, 'confirmed');
+
+    // 5c. Missing token prevents POST submission completely & shows clear message
+    const missingTokenCalls = [];
+    const harnessMissing = createPopupDomHarness({
+      checkoutObj: {
+        order_id: 'gid://shopify/Order/987654321005',
+        order_number: 9005,
+        email: 'missing@example.com',
+      },
+      fetchHandler: async (url, init = {}) => {
+        missingTokenCalls.push({ url, method: init.method || 'GET' });
+        return {
+          ok: true,
+          status: 200,
+          text: async () => JSON.stringify({
+            status: 'success',
+            confirmationStatus: 'pending',
+            record: {
+              shopifyOrderId: '987654321005',
+              orderNumber: '#9005',
+              status: 'pending',
+            },
+          }),
+        };
+      },
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    await harnessMissing.elementsById.get('abh-cancel-btn').clickAsync();
+    await harnessMissing.elementsById.get('abh-confirm-cancel-btn').clickAsync();
+
+    assert.strictEqual(
+      missingTokenCalls.filter((c) => c.method === 'POST').length,
+      0,
+      'Missing confirmationToken must prevent POST cancellation submission'
+    );
+    const missingBanner = harnessMissing.elementsById.get('abh-error-banner');
+    assert.ok(
+      missingBanner && /confirmation token/i.test(missingBanner.textContent),
+      'Missing token must surface clear customer-facing banner message'
+    );
+
+    // 5d. Expired token response from backend shows clear expired message
+    const expiredPopupCalls = [];
+    const harnessExpired = createPopupDomHarness({
+      checkoutObj: {
+        order_id: 'gid://shopify/Order/987654321099',
+        order_number: 9099,
+        email: 'expired@example.com',
+      },
+      fetchHandler: async (url, init = {}) => {
+        expiredPopupCalls.push({ url, method: init.method || 'GET' });
+        if (url.includes('/checkout-confirmation-status')) {
+          return {
+            ok: true,
+            status: 200,
+            text: async () => JSON.stringify({
+              status: 'success',
+              confirmationStatus: 'pending',
+              record: {
+                shopifyOrderId: '987654321099',
+                orderNumber: '#9099',
+                status: 'pending',
+                confirmationToken: expiredToken.token,
+              },
+            }),
+          };
+        }
+        return proxyToTestServerFetch([])(url, init);
+      },
+    });
+    await new Promise((r) => setTimeout(r, 30));
+    await harnessExpired.elementsById.get('abh-cancel-btn').clickAsync();
+    await harnessExpired.elementsById.get('abh-confirm-cancel-btn').clickAsync();
+    const expiredBanner = harnessExpired.elementsById.get('abh-error-banner');
+    assert.ok(
+      expiredBanner && /expired/i.test(expiredBanner.textContent),
+      'Expired token rejection must display clear expired-token message'
+    );
+
+    // 5e. Confirm missing token direct API guard returns "Confirmation token is required."
+    const missingConfirmDirect = await sendRequest(
+      port,
+      'POST',
+      '/api/orders/confirm-shopify-order',
+      { Origin: 'https://extensions.shopifycdn.com' },
+      { orderId: 'gid://shopify/Order/987654321004', orderNumber: '#9004' }
+    );
+    assert.strictEqual(missingConfirmDirect.status, 400);
+    assert.strictEqual(missingConfirmDirect.json.code, 'MISSING_TOKEN');
+    assert.strictEqual(missingConfirmDirect.json.message, 'Confirmation token is required.');
+
+    console.log('✅ Suite 5 Passed: Executed popup script token extraction, duplicate prevention, and error flows.');
     console.log('\n====================================================');
     console.log('🎉 ALL SHOPIFY CANCELLATION FIX TESTS PASSED');
     console.log('====================================================\n');

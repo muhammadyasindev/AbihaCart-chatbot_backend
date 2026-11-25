@@ -35,11 +35,17 @@
     backendUrl = DEFAULT_BACKEND_URL;
   }
 
+  // Verify whether a string matches Abihacart's signed order confirmation token structure
+  // (Prevents Shopify's checkout session token co.token from being treated as an Abihacart HMAC token)
+  const isSignedConfirmationToken = (value) => (
+    typeof value === 'string' && /^\d+:\d+:[a-f0-9]{16,}$/i.test(value.trim())
+  );
+
   // Detect Order Information from Shopify environment
   function detectShopifyOrder() {
     let orderId = '';
     let orderNumber = '';
-    let token = '';
+    let rawToken = '';
     let email = '';
     let phone = '';
 
@@ -50,14 +56,15 @@
       orderNumber = co.order_number ? `#${co.order_number}` : '';
       email = co.email || '';
       phone = co.phone || '';
-      token = co.token || '';
+      rawToken = co.token || '';
     }
 
     // 2. Check URL search parameters
     const params = new URLSearchParams(window.location.search);
     if (!orderId) orderId = params.get('order_id') || params.get('orderId') || '';
     if (!orderNumber) orderNumber = params.get('order_number') || params.get('orderNumber') || (orderId ? `#${orderId}` : '');
-    if (!token) token = params.get('token') || '';
+    const urlToken = params.get('token');
+    if (urlToken) rawToken = urlToken;
     if (!email) email = params.get('email') || '';
     if (!phone) phone = params.get('phone') || '';
 
@@ -66,9 +73,14 @@
     if (rootEl) {
       if (!orderId && rootEl.dataset.orderId) orderId = rootEl.dataset.orderId;
       if (!orderNumber && rootEl.dataset.orderNumber) orderNumber = rootEl.dataset.orderNumber;
-      if (!token && rootEl.dataset.token) token = rootEl.dataset.token;
+      if (!email && rootEl.dataset.email) email = rootEl.dataset.email;
+      if (!phone && rootEl.dataset.phone) phone = rootEl.dataset.phone;
+      if (!isSignedConfirmationToken(rawToken) && rootEl.dataset.token) {
+        rawToken = rootEl.dataset.token;
+      }
     }
 
+    const token = isSignedConfirmationToken(rawToken) ? rawToken.trim() : '';
     return { orderId, orderNumber, token, email, phone };
   }
 
@@ -399,8 +411,31 @@
       overlay.classList.remove('active');
     });
 
+    const showErrorBanner = (message) => {
+      let banner = bodyContainer.querySelector('#abh-error-banner');
+      if (!banner) {
+        banner = document.createElement('div');
+        banner.id = 'abh-error-banner';
+        banner.setAttribute('role', 'alert');
+        banner.style.cssText = 'margin: 10px 0 12px 0; padding: 10px 12px; border-radius: 8px; background: #fef2f2; border: 1px solid #fecaca; color: #991b1b; font-size: 13px; text-align: left;';
+        bodyContainer.prepend(banner);
+      }
+      banner.textContent = message;
+    };
+
+    const clearErrorBanner = () => {
+      const banner = bodyContainer.querySelector('#abh-error-banner');
+      if (banner) banner.remove();
+    };
+
+    let isActionInFlight = false;
+    let isActionCompleted = false;
+
     // Confirm button
     confirmBtn.addEventListener('click', async () => {
+      if (isActionInFlight || isActionCompleted) return;
+      isActionInFlight = true;
+      clearErrorBanner();
       confirmBtn.disabled = true;
       cancelBtn.disabled = true;
       confirmBtn.innerHTML = `<span class="abh-spinner"></span> Confirming...`;
@@ -408,6 +443,7 @@
       try {
         const result = await actions.onConfirm();
         if (result && result.ok !== false && (result.status === 'success' || result.success)) {
+          isActionCompleted = true;
           bodyContainer.innerHTML = `
             <div style="padding: 24px 10px; text-align: center;">
               <div style="width: 56px; height: 56px; border-radius: 50%; background: rgba(16, 185, 129, 0.15); border: 2px solid #10b981; color: #10b981; font-size: 28px; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 16px;">✓</div>
@@ -420,21 +456,24 @@
             overlay.classList.remove('active');
           });
         } else {
-          alert((result && result.message) || `Confirmation failed (HTTP ${result?.httpStatus || 'error'}). Please try again.`);
+          showErrorBanner((result && result.message) || `Confirmation failed (HTTP ${result?.httpStatus || 'error'}). Please try again.`);
           confirmBtn.disabled = false;
           cancelBtn.disabled = false;
           confirmBtn.innerHTML = `<span class="abh-icon-check">✓</span> Confirm My Order`;
         }
       } catch (err) {
-        alert('Unable to reach Abihacart confirmation service. Please check your internet connection and try again.');
+        showErrorBanner('Unable to reach Abihacart confirmation service. Please check your internet connection and try again.');
         confirmBtn.disabled = false;
         cancelBtn.disabled = false;
         confirmBtn.innerHTML = `<span class="abh-icon-check">✓</span> Confirm My Order`;
+      } finally {
+        isActionInFlight = false;
       }
     });
 
     // Cancel button with confirmation safeguard
     cancelBtn.addEventListener('click', () => {
+      if (isActionInFlight || isActionCompleted) return;
       bodyContainer.innerHTML = `
         <div style="padding: 16px 4px; text-align: center;">
           <div style="width: 50px; height: 50px; border-radius: 50%; background: rgba(239, 68, 68, 0.12); color: #ef4444; font-size: 24px; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 14px;">⚠️</div>
@@ -448,12 +487,16 @@
       `;
 
       bodyContainer.querySelector('#abh-keep-order-btn').addEventListener('click', () => {
+        if (isActionInFlight) return;
         // Restore popup view
         createPopupModal(orderData, actions);
         requestAnimationFrame(() => overlay.classList.add('active'));
       });
 
       bodyContainer.querySelector('#abh-confirm-cancel-btn').addEventListener('click', async () => {
+        if (isActionInFlight || isActionCompleted) return;
+        isActionInFlight = true;
+        clearErrorBanner();
         const confirmCancelBtn = bodyContainer.querySelector('#abh-confirm-cancel-btn');
         const keepOrderBtn = bodyContainer.querySelector('#abh-keep-order-btn');
         confirmCancelBtn.disabled = true;
@@ -463,6 +506,7 @@
         try {
           const result = await actions.onCancel();
           if (result && result.ok !== false && (result.status === 'success' || result.success)) {
+            isActionCompleted = true;
             bodyContainer.innerHTML = `
               <div style="padding: 24px 10px; text-align: center;">
                 <div style="width: 56px; height: 56px; border-radius: 50%; background: rgba(239, 68, 68, 0.12); border: 2px solid #ef4444; color: #ef4444; font-size: 28px; display: inline-flex; align-items: center; justify-content: center; margin-bottom: 16px;">✕</div>
@@ -475,16 +519,18 @@
               overlay.classList.remove('active');
             });
           } else {
-            alert((result && result.message) || `Cancellation could not be completed (HTTP ${result?.httpStatus || 'error'}). Please try again.`);
+            showErrorBanner((result && result.message) || `Cancellation could not be completed (HTTP ${result?.httpStatus || 'error'}). Please try again.`);
             confirmCancelBtn.disabled = false;
             if (keepOrderBtn) keepOrderBtn.disabled = false;
             confirmCancelBtn.innerHTML = 'Yes, Cancel';
           }
         } catch (err) {
-          alert('Unable to reach Abihacart cancellation service. Please check your internet connection or contact support.');
+          showErrorBanner('Unable to reach Abihacart cancellation service. Please check your internet connection or contact support.');
           confirmCancelBtn.disabled = false;
           if (keepOrderBtn) keepOrderBtn.disabled = false;
           confirmCancelBtn.innerHTML = 'Yes, Cancel';
+        } finally {
+          isActionInFlight = false;
         }
       });
     });
@@ -499,82 +545,178 @@
   // Main Initialize on Page Load
   async function init() {
     const orderInfo = detectShopifyOrder();
-    if (!orderInfo.orderId && !orderInfo.token) {
+    if (!orderInfo.orderId && !orderInfo.orderNumber && !orderInfo.token) {
       return; // No order on this page
     }
 
-    try {
-      const query = new URLSearchParams({
-        orderId: orderInfo.orderId || '',
-        orderNumber: orderInfo.orderNumber || '',
-        token: orderInfo.token || '',
-        email: orderInfo.email || '',
-        phone: orderInfo.phone || '',
-      });
+    const formatTokenErrorMessage = (payload, fallbackMessage) => {
+      const code = payload?.code;
+      if (code === 'MISSING_TOKEN') {
+        return 'A valid order confirmation token is required. Please refresh this page or open the official link sent to your phone.';
+      }
+      if (code === 'TOKEN_EXPIRED') {
+        return 'Your order confirmation token has expired (30-minute window). Please contact store support for assistance.';
+      }
+      if (code === 'INVALID_TOKEN' || code === 'ORDER_TOKEN_MISMATCH') {
+        return 'Your confirmation token is invalid or could not be verified. Please refresh this page or use the link sent via SMS.';
+      }
+      if (code === 'UNAUTHORIZED_ACCESS') {
+        return 'Customer verification (email or phone) is required before confirming or cancelling this order.';
+      }
+      return payload?.message || fallbackMessage;
+    };
+
+    const parseJsonApiResponse = async (res, fallbackMessage) => {
+      const rawText = await res.text().catch(() => '');
+      let parsed = null;
+      try {
+        parsed = rawText ? JSON.parse(rawText) : {};
+      } catch {
+        parsed = null;
+      }
+      if (!parsed || typeof parsed !== 'object') {
+        return {
+          ok: false,
+          httpStatus: res.status,
+          status: 'error',
+          message: `${fallbackMessage} (HTTP ${res.status})`,
+        };
+      }
+      return {
+        ok: res.ok,
+        httpStatus: res.status,
+        ...parsed,
+        message: res.ok ? parsed.message : formatTokenErrorMessage(parsed, `${fallbackMessage} (HTTP ${res.status})`),
+      };
+    };
+
+    const fetchCheckoutStatus = async () => {
+      const query = new URLSearchParams();
+      if (orderInfo.orderId) query.set('orderId', String(orderInfo.orderId));
+      if (orderInfo.orderNumber) query.set('orderNumber', String(orderInfo.orderNumber));
+      if (isSignedConfirmationToken(orderInfo.token)) query.set('token', orderInfo.token);
+      if (orderInfo.email) query.set('email', String(orderInfo.email));
+      if (orderInfo.phone) query.set('phone', String(orderInfo.phone));
 
       const res = await fetch(`${backendUrl}/api/orders/checkout-confirmation-status?${query.toString()}`, {
         headers: { Accept: 'application/json' },
       });
+      return parseJsonApiResponse(res, 'Unable to load order confirmation status');
+    };
 
-      if (!res.ok) return;
+    try {
+      const statusResponse = await fetchCheckoutStatus();
+      const isStatusSuccess = Boolean(
+        statusResponse.ok &&
+        (statusResponse.status === 'success' || statusResponse.success === true) &&
+        statusResponse.record
+      );
+      if (!isStatusSuccess) return;
 
-      const data = await res.json();
-      if (!data.success || !data.record) return;
-
-      const record = data.record;
+      const record = statusResponse.record;
 
       // If already confirmed or cancelled, do not prompt repeatedly unless specifically targeted
       if (record.status === 'confirmed' || record.status === 'cancelled') {
         return;
       }
 
-      const parseJsonApiResponse = async (res, fallbackMessage) => {
-        const rawText = await res.text().catch(() => '');
-        let parsed = null;
-        try {
-          parsed = rawText ? JSON.parse(rawText) : {};
-        } catch {
-          parsed = null;
+      let activeToken = isSignedConfirmationToken(record.confirmationToken)
+        ? record.confirmationToken.trim()
+        : (isSignedConfirmationToken(orderInfo.token) ? orderInfo.token.trim() : '');
+
+      const resolveSignedConfirmationToken = async () => {
+        if (isSignedConfirmationToken(activeToken)) {
+          return { ok: true, token: activeToken };
         }
-        if (!parsed || typeof parsed !== 'object') {
-          return {
-            ok: false,
-            httpStatus: res.status,
-            status: 'error',
-            message: `${fallbackMessage} (HTTP ${res.status})`,
-          };
+        const refreshedStatus = await fetchCheckoutStatus();
+        const refreshedToken = refreshedStatus?.record?.confirmationToken;
+        if (refreshedStatus.ok && isSignedConfirmationToken(refreshedToken)) {
+          activeToken = refreshedToken.trim();
+          return { ok: true, token: activeToken };
         }
         return {
-          ok: res.ok,
-          httpStatus: res.status,
-          ...parsed,
+          ok: false,
+          httpStatus: refreshedStatus?.httpStatus || 400,
+          status: 'fail',
+          code: refreshedStatus?.code || 'MISSING_TOKEN',
+          message: formatTokenErrorMessage(
+            refreshedStatus && !refreshedStatus.ok ? refreshedStatus : { code: 'MISSING_TOKEN' },
+            'A valid order confirmation token is required.'
+          ),
         };
       };
+
+      let submissionInFlight = false;
+      let submittedFinalState = null;
 
       // Open the Abihacart Assistant popup immediately
       createPopupModal(record, {
         onConfirm: async () => {
-          const confirmRes = await fetch(`${backendUrl}/api/orders/confirm-shopify-order`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-            body: JSON.stringify({
-              token: record.confirmationToken || orderInfo.token,
-              orderId: record.shopifyOrderId || orderInfo.orderId,
-            }),
-          });
-          return parseJsonApiResponse(confirmRes, 'Confirmation request failed');
+          if (submissionInFlight || submittedFinalState) {
+            return {
+              ok: false,
+              status: 'fail',
+              code: 'DUPLICATE_REQUEST',
+              message: submittedFinalState
+                ? `This order has already been ${submittedFinalState}.`
+                : 'Your order request is already being processed.',
+            };
+          }
+          submissionInFlight = true;
+          try {
+            const tokenCheck = await resolveSignedConfirmationToken();
+            if (!tokenCheck.ok) return tokenCheck;
+
+            const confirmRes = await fetch(`${backendUrl}/api/orders/confirm-shopify-order`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+              body: JSON.stringify({
+                token: tokenCheck.token,
+                orderId: record.shopifyOrderId || orderInfo.orderId,
+              }),
+            });
+            const parsed = await parseJsonApiResponse(confirmRes, 'Confirmation request failed');
+            if (parsed.ok && parsed.status === 'success') {
+              submittedFinalState = 'confirmed';
+            }
+            return parsed;
+          } finally {
+            submissionInFlight = false;
+          }
         },
         onCancel: async () => {
-          const cancelRes = await fetch(`${backendUrl}/api/orders/cancel-shopify-order`, {
-            method: 'POST',
-            headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
-            body: JSON.stringify({
-              token: record.confirmationToken || orderInfo.token,
-              orderId: record.shopifyOrderId || orderInfo.orderId,
-              reason: 'Customer requested cancellation via Thank You popup',
-            }),
-          });
-          return parseJsonApiResponse(cancelRes, 'Cancellation request failed');
+          if (submissionInFlight || submittedFinalState === 'cancelled') {
+            return {
+              ok: false,
+              status: 'fail',
+              code: 'DUPLICATE_REQUEST',
+              message: submittedFinalState === 'cancelled'
+                ? 'This order cancellation has already been submitted.'
+                : 'Your cancellation request is already being processed.',
+            };
+          }
+          submissionInFlight = true;
+          try {
+            const tokenCheck = await resolveSignedConfirmationToken();
+            if (!tokenCheck.ok) return tokenCheck;
+
+            const cancelRes = await fetch(`${backendUrl}/api/orders/cancel-shopify-order`, {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json', Accept: 'application/json' },
+              body: JSON.stringify({
+                token: tokenCheck.token,
+                orderId: record.shopifyOrderId || orderInfo.orderId,
+                reason: 'Customer requested cancellation via Thank You popup',
+              }),
+            });
+            const parsed = await parseJsonApiResponse(cancelRes, 'Cancellation request failed');
+            if (parsed.ok && parsed.status === 'success') {
+              submittedFinalState = 'cancelled';
+            }
+            return parsed;
+          } finally {
+            submissionInFlight = false;
+          }
         },
       });
     } catch (err) {
