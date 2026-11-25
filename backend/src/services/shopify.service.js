@@ -117,10 +117,11 @@ class ShopifyService {
 
     // Handle token expiration & rotation
     if (session.isTokenExpired()) {
+      const targetShop = session.canonicalShop || shop;
       if (session.refreshToken) {
-        logger.info(`Session access token is expiring for ${shop}. Initiating automatic refresh.`);
+        logger.info(`Session access token is expiring for ${targetShop}. Initiating automatic refresh.`);
         const refreshed = await this.refreshAccessToken({
-          shop,
+          shop: targetShop,
           refreshToken: session.refreshToken,
         });
 
@@ -129,6 +130,13 @@ class ShopifyService {
           refreshToken: refreshed.refreshToken,
           expiresAt: refreshed.expiresIn ? new Date(Date.now() + refreshed.expiresIn * 1000) : null,
         });
+        if (targetShop !== shop) {
+          await SessionStore.upsertSession(targetShop, {
+            accessToken: refreshed.accessToken,
+            refreshToken: refreshed.refreshToken,
+            expiresAt: refreshed.expiresIn ? new Date(Date.now() + refreshed.expiresIn * 1000) : null,
+          });
+        }
 
         return updated.accessToken;
       }
@@ -149,7 +157,9 @@ class ShopifyService {
    */
   async graphql({ query, variables = {}, shop = config.shopify.shop, retries = 3 }) {
     const accessToken = await this.getValidAccessToken(shop);
-    const endpoint = `https://${shop}/admin/api/${this.apiVersion}/graphql.json`;
+    const session = await SessionStore.findByShop(shop);
+    const targetShop = (session && session.canonicalShop) || shop;
+    const endpoint = `https://${targetShop}/admin/api/${this.apiVersion}/graphql.json`;
 
     try {
       const response = await fetch(endpoint, {

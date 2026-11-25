@@ -166,16 +166,27 @@ const handleCallback = async (req, res, next) => {
       });
     }
 
-    // 4. Validate CSRF state nonce against SessionStore (DB + memory) or signed HttpOnly browser cookie
-    const storeCheck = await SessionStore.findAuthState(shop, state);
+    // 4. Validate CSRF state nonce against SessionStore (including configured store alias / cookie shop) or signed HttpOnly browser cookie
+    const configuredShop = sanitizeShopDomain(config.shopify.shop);
     const cookies = parseCookies(req.headers.cookie);
     const cookieCheck = verifySignedStateCookieValue(
       cookies[OAUTH_STATE_COOKIE],
       config.shopify.clientSecret
     );
+    const cookieShop = cookieCheck.valid ? sanitizeShopDomain(cookieCheck.shop) : '';
+    const fallbackShops = [cookieShop, configuredShop].filter(
+      (candidate, index, arr) => (
+        candidate &&
+        candidate !== shop &&
+        isValidShopDomain(candidate) &&
+        arr.indexOf(candidate) === index
+      )
+    );
+
+    const storeCheck = await SessionStore.findAuthState(shop, state, { fallbackShops });
     const cookieMatches = (
       cookieCheck.valid &&
-      cookieCheck.shop === shop &&
+      isValidShopDomain(cookieShop) &&
       cookieCheck.state === state
     );
     const cookieExpired = cookieMatches && cookieCheck.expiresAtMs < Date.now();
@@ -193,7 +204,7 @@ const handleCallback = async (req, res, next) => {
         stateExpiredInStore: Boolean(storeCheck.expired),
         hasStateCookie: Boolean(cookies[OAUTH_STATE_COOKIE]),
         cookieSignatureValid: Boolean(cookieCheck.valid),
-        cookieShopMatches: Boolean(cookieCheck.valid && cookieCheck.shop === shop),
+        cookieShopMatches: Boolean(cookieCheck.valid && cookieShop === shop),
         cookieStateMatches: Boolean(cookieCheck.valid && cookieCheck.state === state),
         cookieExpired: Boolean(cookieExpired),
       };
@@ -222,20 +233,36 @@ const handleCallback = async (req, res, next) => {
     // 5. Exchange authorization code for offline access token
     const tokenData = await shopifyService.exchangeCodeForToken({ shop, code });
 
-    // 6. Update session with secured token details (offline access) and clear pending nonces
-    SessionStore.clearMemoryState(shop);
-    const updatedSession = await SessionStore.upsertSession(shop, {
+    // 6. Persist session for canonical shop AND any linked store alias (e.g. abihacart.myshopify.com -> dwpaps-9q.myshopify.com)
+    const sessionPayload = {
       accessToken: tokenData.accessToken,
       scope: tokenData.scope,
       refreshToken: tokenData.refreshToken || null,
       expiresAt: tokenData.expiresIn
         ? new Date(Date.now() + tokenData.expiresIn * 1000)
         : null,
+      canonicalShop: shop,
       state: null, // Clear state nonce after successful exchange
       stateExpiresAt: null,
       pendingStates: [],
       isOnline: false, // Persistent offline access
-    });
+    };
+
+    SessionStore.clearMemoryState(shop);
+    const updatedSession = await SessionStore.upsertSession(shop, sessionPayload);
+
+    const linkedAliases = [storeCheck.matchedShop, cookieShop].filter(
+      (candidate, index, arr) => (
+        candidate &&
+        candidate !== shop &&
+        isValidShopDomain(candidate) &&
+        arr.indexOf(candidate) === index
+      )
+    );
+    for (const aliasShop of linkedAliases) {
+      SessionStore.clearMemoryState(aliasShop);
+      await SessionStore.upsertSession(aliasShop, sessionPayload);
+    }
 
     clearOAuthStateCookie(req, res);
     logger.info(`Shopify OAuth completed successfully for shop: ${shop}. Granted scopes: ${tokenData.scope}`);
@@ -245,6 +272,8 @@ const handleCallback = async (req, res, next) => {
       status: 'success',
       message: 'Shopify app authorization completed successfully.',
       shop,
+      canonicalShop: shop,
+      ...(linkedAliases.length > 0 ? { linkedAliases } : {}),
       grantedScopes: tokenData.scope.split(','),
       offlineAccess: true,
       hasRefreshToken: Boolean(tokenData.refreshToken),

@@ -374,6 +374,64 @@ const runAllTests = async () => {
           else process.env.BACKEND_URL = prevEnvBackend;
           require.cache[envPath] = prevCachedEnv;
         }
+
+        // Test 7.7: Canonical shop domain alias (abihacart.myshopify.com -> dwpaps-9q.myshopify.com)
+        SessionStore.clearMemory();
+        const aliasAuth = await fetchJSON(
+          `http://localhost:${testPort}/api/shopify/auth?shop=abihacart.myshopify.com`,
+          { Accept: 'application/json' }
+        );
+        const aliasState = new URL(aliasAuth.body.authorizationUrl).searchParams.get('state');
+        const aliasCookies = Array.isArray(aliasAuth.headers['set-cookie'])
+          ? aliasAuth.headers['set-cookie'][0].split(';')[0]
+          : '';
+        const canonicalCallbackQs = signShopifyQuery({
+          code: 'oauth_code_canonical',
+          shop: 'dwpaps-9q.myshopify.com',
+          state: aliasState,
+          timestamp: String(Math.floor(Date.now() / 1000)),
+        }, config.shopify.clientSecret);
+        const aliasCbRes = await fetchJSON(
+          `http://localhost:${testPort}/api/shopify/auth/callback?${canonicalCallbackQs}`,
+          { Cookie: aliasCookies }
+        );
+        assert(
+          aliasCbRes.statusCode === 200 &&
+          aliasCbRes.body.status === 'success' &&
+          aliasCbRes.body.canonicalShop === 'dwpaps-9q.myshopify.com',
+          `Canonical shop redirect callback must succeed, got ${aliasCbRes.statusCode}`
+        );
+        const savedCanonical = await SessionStore.findByShop('dwpaps-9q.myshopify.com');
+        const savedAlias = await SessionStore.findByShop('abihacart.myshopify.com');
+        assert(
+          savedCanonical?.accessToken === 'shpat_mock_verified_token' &&
+          savedAlias?.accessToken === 'shpat_mock_verified_token' &&
+          savedAlias?.canonicalShop === 'dwpaps-9q.myshopify.com',
+          'Access token session must sync to both canonical domain and alias store domain'
+        );
+        console.log('✅ Test 7.7 Passed: Canonical store domain redirect (abihacart -> dwpaps-9q) synced cleanly.');
+
+        // Test 7.8: Canonical alias fallback works via DB/memory state even without browser cookies
+        SessionStore.clearMemory();
+        const noCookieAliasAuth = await fetchJSON(
+          `http://localhost:${testPort}/api/shopify/auth?shop=abihacart.myshopify.com`,
+          { Accept: 'application/json' }
+        );
+        const noCookieState = new URL(noCookieAliasAuth.body.authorizationUrl).searchParams.get('state');
+        const noCookieCbQs = signShopifyQuery({
+          code: 'oauth_code_canonical_nocookie',
+          shop: 'dwpaps-9q.myshopify.com',
+          state: noCookieState,
+          timestamp: String(Math.floor(Date.now() / 1000)),
+        }, config.shopify.clientSecret);
+        const noCookieCbRes = await fetchJSON(
+          `http://localhost:${testPort}/api/shopify/auth/callback?${noCookieCbQs}`
+        );
+        assert(
+          noCookieCbRes.statusCode === 200 && noCookieCbRes.body.status === 'success',
+          `Cookie-less canonical domain alias callback must succeed via fallbackShops, got ${noCookieCbRes.statusCode}`
+        );
+        console.log('✅ Test 7.8 Passed: Cookie-less canonical alias lookup verified.');
       } finally {
         shopifyService.exchangeCodeForToken = origExchange;
         SessionStore.clearMemory();

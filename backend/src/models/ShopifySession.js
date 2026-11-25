@@ -9,6 +9,12 @@ const ShopifySessionSchema = new mongoose.Schema({
     lowercase: true,
     index: true,
   },
+  canonicalShop: {
+    type: String,
+    default: null,
+    trim: true,
+    lowercase: true,
+  },
   accessToken: {
     type: String,
     required: true,
@@ -178,40 +184,64 @@ class SessionStore {
   }
 
   /**
-   * Looks up a matching OAuth state entry across DB session and in-memory fallback.
+   * Looks up a matching OAuth state entry across DB session, in-memory fallback, and any alias shop domains.
    * @param {string} shop
    * @param {string} state
-   * @returns {Promise<{ matched: boolean, expired: boolean, session: Object|null }>}
+   * @param {Object} [options]
+   * @param {string[]} [options.fallbackShops]
+   * @returns {Promise<{ matched: boolean, expired: boolean, matchedShop: string|null, session: Object|null }>}
    */
-  static async findAuthState(shop, state) {
+  static async findAuthState(shop, state, options = {}) {
     const normalizedShop = (shop || '').trim().toLowerCase();
-    const candidates = [];
-
-    const dbOrCurrentSession = await this.findByShop(normalizedShop);
-    if (dbOrCurrentSession) candidates.push(dbOrCurrentSession);
-
-    const mem = memorySessions.get(normalizedShop);
-    if (mem && mem !== dbOrCurrentSession) {
-      candidates.push(mem);
-    }
+    const fallbackShops = Array.isArray(options.fallbackShops) ? options.fallbackShops : [];
+    const shopsToCheck = [
+      normalizedShop,
+      ...fallbackShops.map((s) => (s || '').trim().toLowerCase()).filter(Boolean),
+    ].filter((value, index, arr) => value && arr.indexOf(value) === index);
 
     const nowMs = Date.now();
-    for (const candidate of candidates) {
-      if (Array.isArray(candidate.pendingStates)) {
-        const entry = candidate.pendingStates.find((item) => item && item.state === state);
-        if (entry) {
-          const isExpired = entry.expiresAt && new Date(entry.expiresAt).getTime() < nowMs;
-          return { matched: !isExpired, expired: Boolean(isExpired), session: dbOrCurrentSession || candidate };
-        }
+    let primarySession = null;
+
+    for (const targetShop of shopsToCheck) {
+      const candidates = [];
+      const dbOrCurrentSession = await this.findByShop(targetShop);
+      if (targetShop === normalizedShop) {
+        primarySession = dbOrCurrentSession;
+      }
+      if (dbOrCurrentSession) candidates.push(dbOrCurrentSession);
+
+      const mem = memorySessions.get(targetShop);
+      if (mem && mem !== dbOrCurrentSession) {
+        candidates.push(mem);
       }
 
-      if (candidate.state && candidate.state === state) {
-        const isExpired = candidate.stateExpiresAt && new Date(candidate.stateExpiresAt).getTime() < nowMs;
-        return { matched: !isExpired, expired: Boolean(isExpired), session: dbOrCurrentSession || candidate };
+      for (const candidate of candidates) {
+        if (Array.isArray(candidate.pendingStates)) {
+          const entry = candidate.pendingStates.find((item) => item && item.state === state);
+          if (entry) {
+            const isExpired = entry.expiresAt && new Date(entry.expiresAt).getTime() < nowMs;
+            return {
+              matched: !isExpired,
+              expired: Boolean(isExpired),
+              matchedShop: targetShop,
+              session: dbOrCurrentSession || candidate,
+            };
+          }
+        }
+
+        if (candidate.state && candidate.state === state) {
+          const isExpired = candidate.stateExpiresAt && new Date(candidate.stateExpiresAt).getTime() < nowMs;
+          return {
+            matched: !isExpired,
+            expired: Boolean(isExpired),
+            matchedShop: targetShop,
+            session: dbOrCurrentSession || candidate,
+          };
+        }
       }
     }
 
-    return { matched: false, expired: false, session: dbOrCurrentSession };
+    return { matched: false, expired: false, matchedShop: null, session: primarySession };
   }
 
   /**
