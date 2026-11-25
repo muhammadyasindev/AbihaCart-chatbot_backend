@@ -96,10 +96,88 @@ const buildAuthorizationUrl = ({ shop, clientId, scopes, redirectUri, state }) =
   return `https://${shop}/admin/oauth/authorize?${params.toString()}`;
 };
 
+/**
+ * Parses an HTTP Cookie header into a key-value map.
+ * @param {string} cookieHeader
+ * @returns {Object<string, string>}
+ */
+const parseCookies = (cookieHeader) => {
+  if (!cookieHeader || typeof cookieHeader !== 'string') return {};
+  return cookieHeader.split(';').reduce((acc, part) => {
+    const eqIndex = part.indexOf('=');
+    if (eqIndex <= 0) return acc;
+    const key = part.slice(0, eqIndex).trim();
+    const rawVal = part.slice(eqIndex + 1).trim();
+    if (!key) return acc;
+    try {
+      acc[key] = decodeURIComponent(rawVal);
+    } catch {
+      acc[key] = rawVal;
+    }
+    return acc;
+  }, {});
+};
+
+/**
+ * Creates an HMAC-signed OAuth state cookie payload binding shop, nonce, and expiry.
+ * @param {Object} params
+ * @param {string} params.shop
+ * @param {string} params.state
+ * @param {number} params.expiresAtMs
+ * @param {string} secret
+ * @returns {string}
+ */
+const createSignedStateCookieValue = ({ shop, state, expiresAtMs }, secret) => {
+  if (!secret || !shop || !state || !expiresAtMs) return '';
+  const payload = `${shop}|${state}|${expiresAtMs}`;
+  const sig = crypto
+    .createHmac('sha256', secret)
+    .update(payload)
+    .digest('hex');
+  return `${payload}|${sig}`;
+};
+
+/**
+ * Verifies an HMAC-signed OAuth state cookie value using constant-time comparison.
+ * @param {string} cookieValue
+ * @param {string} secret
+ * @returns {{ valid: boolean, shop?: string, state?: string, expiresAtMs?: number }}
+ */
+const verifySignedStateCookieValue = (cookieValue, secret) => {
+  if (!cookieValue || typeof cookieValue !== 'string' || !secret) {
+    return { valid: false };
+  }
+  const parts = cookieValue.split('|');
+  if (parts.length !== 4) return { valid: false };
+
+  const [shop, state, expiresAtRaw, sig] = parts;
+  const expiresAtMs = Number(expiresAtRaw);
+  if (!shop || !state || !Number.isFinite(expiresAtMs) || !sig) {
+    return { valid: false };
+  }
+
+  const payload = `${shop}|${state}|${expiresAtMs}`;
+  const expectedSig = crypto
+    .createHmac('sha256', secret)
+    .update(payload)
+    .digest('hex');
+
+  const sigBuf = Buffer.from(sig, 'utf-8');
+  const expectedBuf = Buffer.from(expectedSig, 'utf-8');
+  if (sigBuf.length !== expectedBuf.length || !crypto.timingSafeEqual(sigBuf, expectedBuf)) {
+    return { valid: false };
+  }
+
+  return { valid: true, shop, state, expiresAtMs };
+};
+
 module.exports = {
   isValidShopDomain,
   sanitizeShopDomain,
   generateNonce,
   verifyHmac,
   buildAuthorizationUrl,
+  parseCookies,
+  createSignedStateCookieValue,
+  verifySignedStateCookieValue,
 };

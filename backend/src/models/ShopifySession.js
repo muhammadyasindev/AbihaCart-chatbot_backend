@@ -37,6 +37,16 @@ const ShopifySessionSchema = new mongoose.Schema({
     type: Date,
     default: null,
   },
+  pendingStates: {
+    type: [
+      {
+        _id: false,
+        state: { type: String, required: true },
+        expiresAt: { type: Date, required: true },
+      },
+    ],
+    default: [],
+  },
   installedAt: {
     type: Date,
     default: Date.now,
@@ -85,7 +95,7 @@ class SessionStore {
   static async findByShop(shop) {
     const normalizedShop = (shop || '').trim().toLowerCase();
     if (this.isDBConnected()) {
-      return MongooseShopifySession.findOne({ shop: normalizedShop });
+      return MongooseShopifySession.findOne({ shop: normalizedShop }).sort({ updatedAt: -1 });
     }
     const mem = memorySessions.get(normalizedShop);
     if (!mem) return null;
@@ -94,11 +104,17 @@ class SessionStore {
 
   static async upsertSession(shop, updateData) {
     const normalizedShop = (shop || '').trim().toLowerCase();
+    const updatePayload = {
+      ...updateData,
+      shop: normalizedShop,
+      updatedAt: new Date(),
+    };
+
     if (this.isDBConnected()) {
       return MongooseShopifySession.findOneAndUpdate(
         { shop: normalizedShop },
-        { ...updateData, shop: normalizedShop, updatedAt: new Date() },
-        { upsert: true, new: true }
+        { $set: updatePayload },
+        { upsert: true, new: true, sort: { updatedAt: -1 } }
       );
     }
 
@@ -109,12 +125,105 @@ class SessionStore {
     };
     const updated = {
       ...existing,
-      ...updateData,
-      shop: normalizedShop,
-      updatedAt: new Date(),
+      ...updatePayload,
     };
     memorySessions.set(normalizedShop, updated);
     return new MongooseShopifySession(updated);
+  }
+
+  /**
+   * Registers a new CSRF OAuth state nonce without invalidating other active pending flows.
+   * Keeps up to the latest 10 unexpired states per shop and mirrors to memory fallback.
+   * @param {string} shop
+   * @param {string} state
+   * @param {Date} stateExpiresAt
+   */
+  static async registerAuthState(shop, state, stateExpiresAt) {
+    const normalizedShop = (shop || '').trim().toLowerCase();
+    const nowMs = Date.now();
+    const existing = await this.findByShop(normalizedShop);
+    const currentPending = Array.isArray(existing?.pendingStates)
+      ? existing.pendingStates.filter((entry) => entry && entry.state && new Date(entry.expiresAt).getTime() > nowMs)
+      : [];
+
+    const nextPending = [
+      ...currentPending.filter((entry) => entry.state !== state),
+      { state, expiresAt: stateExpiresAt },
+    ].slice(-10);
+
+    // Mirror to in-memory cache as well so transient DB disconnects during OAuth still resolve
+    const memExisting = memorySessions.get(normalizedShop) || {
+      shop: normalizedShop,
+      installedAt: new Date(),
+    };
+    memorySessions.set(normalizedShop, {
+      ...memExisting,
+      shop: normalizedShop,
+      state,
+      stateExpiresAt,
+      pendingStates: nextPending,
+      updatedAt: new Date(),
+    });
+
+    return this.upsertSession(normalizedShop, {
+      state,
+      stateExpiresAt,
+      pendingStates: nextPending,
+    });
+  }
+
+  /**
+   * Looks up a matching OAuth state entry across DB session and in-memory fallback.
+   * @param {string} shop
+   * @param {string} state
+   * @returns {Promise<{ matched: boolean, expired: boolean, session: Object|null }>}
+   */
+  static async findAuthState(shop, state) {
+    const normalizedShop = (shop || '').trim().toLowerCase();
+    const candidates = [];
+
+    const dbOrCurrentSession = await this.findByShop(normalizedShop);
+    if (dbOrCurrentSession) candidates.push(dbOrCurrentSession);
+
+    const mem = memorySessions.get(normalizedShop);
+    if (mem && mem !== dbOrCurrentSession) {
+      candidates.push(mem);
+    }
+
+    const nowMs = Date.now();
+    for (const candidate of candidates) {
+      if (Array.isArray(candidate.pendingStates)) {
+        const entry = candidate.pendingStates.find((item) => item && item.state === state);
+        if (entry) {
+          const isExpired = entry.expiresAt && new Date(entry.expiresAt).getTime() < nowMs;
+          return { matched: !isExpired, expired: Boolean(isExpired), session: dbOrCurrentSession || candidate };
+        }
+      }
+
+      if (candidate.state && candidate.state === state) {
+        const isExpired = candidate.stateExpiresAt && new Date(candidate.stateExpiresAt).getTime() < nowMs;
+        return { matched: !isExpired, expired: Boolean(isExpired), session: dbOrCurrentSession || candidate };
+      }
+    }
+
+    return { matched: false, expired: false, session: dbOrCurrentSession };
+  }
+
+  /**
+   * Clears in-memory and persisted pending OAuth states after token exchange completes.
+   * @param {string} shop
+   */
+  static clearMemoryState(shop) {
+    const normalizedShop = (shop || '').trim().toLowerCase();
+    const mem = memorySessions.get(normalizedShop);
+    if (mem) {
+      memorySessions.set(normalizedShop, {
+        ...mem,
+        state: null,
+        stateExpiresAt: null,
+        pendingStates: [],
+      });
+    }
   }
 
   static clearMemory() {

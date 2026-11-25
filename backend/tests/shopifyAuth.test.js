@@ -9,8 +9,13 @@ const {
   generateNonce,
   verifyHmac,
   buildAuthorizationUrl,
+  createSignedStateCookieValue,
+  verifySignedStateCookieValue,
 } = require('../src/utils/shopifyAuth');
 const ShopifySession = require('../src/models/ShopifySession');
+const { SessionStore } = require('../src/models/ShopifySession');
+const config = require('../src/config/env');
+const shopifyService = require('../src/services/shopify.service');
 const app = require('../src/app');
 
 const testPort = 5998;
@@ -207,6 +212,171 @@ const runAllTests = async () => {
       );
       console.log(`✅ Test 6.4: Connection diagnostic returned status: "${testConnRes.body.status}".`);
       console.log('   Diagnostic summary:', JSON.stringify(testConnRes.body.authFlow || testConnRes.body.shop));
+
+      // -----------------------------------------------------------------
+      // 7. OAuth State Persistence, Concurrency & Signed Cookie Resilience
+      // -----------------------------------------------------------------
+      console.log('\n--- Suite 7: OAuth State Persistence, Trailing Slash & CSRF ---');
+      SessionStore.clearMemory();
+
+      // Test 7.1: Ensure trailing slash on backendUrl does not leak into redirect_uri
+      const origBackendUrl = config.urls.backendUrl;
+      const origClientId = config.shopify.clientId;
+      const origClientSecret = config.shopify.clientSecret;
+      config.shopify.clientId = config.shopify.clientId || 'test_client_id_oauth';
+      config.shopify.clientSecret = config.shopify.clientSecret || testSecret;
+      config.urls.backendUrl = 'https://abihacart-chatbot-backend.onrender.com';
+
+      const signShopifyQuery = (params, secret) => {
+        const sortedMsg = Object.keys(params)
+          .sort()
+          .map((k) => `${k}=${params[k]}`)
+          .join('&');
+        const hmacSig = crypto.createHmac('sha256', secret).update(sortedMsg).digest('hex');
+        return new URLSearchParams({ ...params, hmac: hmacSig }).toString();
+      };
+
+      // Initiate two OAuth flows consecutively (simulating prefetch or double-click)
+      const auth1 = await fetchJSON(
+        `http://localhost:${testPort}/api/shopify/auth?shop=abihacart.myshopify.com`,
+        { Accept: 'application/json' }
+      );
+      const state1 = new URL(auth1.body.authorizationUrl).searchParams.get('state');
+      const redirectUri1 = new URL(auth1.body.authorizationUrl).searchParams.get('redirect_uri');
+      assert(
+        redirectUri1 === 'https://abihacart-chatbot-backend.onrender.com/api/shopify/auth/callback',
+        `Expected single-slash redirect_uri, got ${redirectUri1}`
+      );
+      assert(auth1.headers['cache-control']?.includes('no-store'), 'OAuth initiation must set no-store');
+      const setCookieHeader = Array.isArray(auth1.headers['set-cookie'])
+        ? auth1.headers['set-cookie'].join('; ')
+        : String(auth1.headers['set-cookie'] || '');
+      assert(
+        setCookieHeader.includes('abihacart_oauth_state=') &&
+        setCookieHeader.includes('HttpOnly') &&
+        setCookieHeader.includes('SameSite=Lax'),
+        'OAuth initiation must set HttpOnly SameSite=Lax state cookie'
+      );
+
+      const auth2 = await fetchJSON(
+        `http://localhost:${testPort}/api/shopify/auth?shop=abihacart.myshopify.com`,
+        { Accept: 'application/json' }
+      );
+      const state2 = new URL(auth2.body.authorizationUrl).searchParams.get('state');
+      assert(state1 && state2 && state1 !== state2, 'Sequential OAuth nonces must remain distinct');
+
+      // Test 7.2: Forged state nonce with valid HMAC must still fail with 403
+      const forgedQs = signShopifyQuery({
+        code: 'oauth_code_forged',
+        shop: 'abihacart.myshopify.com',
+        state: 'forged_state_nonce_000000',
+        timestamp: String(Math.floor(Date.now() / 1000)),
+      }, config.shopify.clientSecret);
+      const forgedStateRes = await fetchJSON(`http://localhost:${testPort}/api/shopify/auth/callback?${forgedQs}`);
+      assert(forgedStateRes.statusCode === 403, `Forged state must return 403, got ${forgedStateRes.statusCode}`);
+      assert(
+        forgedStateRes.body.message === 'Invalid state nonce. CSRF validation failed.',
+        'Forged state must fail CSRF validation'
+      );
+      console.log('✅ Test 7.1-7.2 Passed: Redirect URI normalization and forged-state 403 defense verified.');
+
+      // Test 7.3: First OAuth tab's state remains valid after second OAuth initiation
+      const origExchange = shopifyService.exchangeCodeForToken.bind(shopifyService);
+      shopifyService.exchangeCodeForToken = async () => ({
+        accessToken: 'shpat_mock_verified_token',
+        scope: 'read_products,read_orders',
+        expiresIn: null,
+        refreshToken: null,
+      });
+
+      try {
+        const validQs1 = signShopifyQuery({
+          code: 'oauth_code_tab1',
+          shop: 'abihacart.myshopify.com',
+          state: state1,
+          timestamp: String(Math.floor(Date.now() / 1000)),
+        }, config.shopify.clientSecret);
+        const cb1Res = await fetchJSON(`http://localhost:${testPort}/api/shopify/auth/callback?${validQs1}`);
+        assert(cb1Res.statusCode === 200 && cb1Res.body.status === 'success', 'Earlier active state must succeed on callback');
+
+        // Single-use: replaying state1 after completion must be rejected
+        const replayRes = await fetchJSON(`http://localhost:${testPort}/api/shopify/auth/callback?${validQs1}`);
+        assert(replayRes.statusCode === 403, 'Replayed callback state must return 403');
+        console.log('✅ Test 7.3 Passed: Concurrent OAuth initiation preserved earlier state and cleared nonces after exchange.');
+
+        // Test 7.4: Signed HttpOnly cookie backup succeeds when DB state was cleared/split-brained
+        SessionStore.clearMemory();
+        const fallbackNonce = generateNonce();
+        const cookieToken = createSignedStateCookieValue(
+          {
+            shop: 'abihacart.myshopify.com',
+            state: fallbackNonce,
+            expiresAtMs: Date.now() + 60000,
+          },
+          config.shopify.clientSecret
+        );
+        const verifiedCookie = verifySignedStateCookieValue(cookieToken, config.shopify.clientSecret);
+        assert(verifiedCookie.valid && verifiedCookie.state === fallbackNonce, 'Signed cookie helper must validate');
+
+        const cookieQs = signShopifyQuery({
+          code: 'oauth_code_cookie_backup',
+          shop: 'abihacart.myshopify.com',
+          state: fallbackNonce,
+          timestamp: String(Math.floor(Date.now() / 1000)),
+        }, config.shopify.clientSecret);
+        const cbCookieRes = await fetchJSON(
+          `http://localhost:${testPort}/api/shopify/auth/callback?${cookieQs}`,
+          { Cookie: `abihacart_oauth_state=${encodeURIComponent(cookieToken)}` }
+        );
+        assert(cbCookieRes.statusCode === 200 && cbCookieRes.body.status === 'success', 'Signed cookie fallback must succeed');
+        const clearCookieHeader = Array.isArray(cbCookieRes.headers['set-cookie'])
+          ? cbCookieRes.headers['set-cookie'].join('; ')
+          : String(cbCookieRes.headers['set-cookie'] || '');
+        assert(clearCookieHeader.includes('Max-Age=0'), 'Callback must clear OAuth state cookie');
+        console.log('✅ Test 7.4 Passed: Signed HttpOnly OAuth state cookie resilience verified.');
+
+        // Test 7.5: Expired state must return 403 expired message
+        await SessionStore.registerAuthState(
+          'abihacart.myshopify.com',
+          'expired_state_1234',
+          new Date(Date.now() - 5000)
+        );
+        const expiredQs = signShopifyQuery({
+          code: 'oauth_code_expired',
+          shop: 'abihacart.myshopify.com',
+          state: 'expired_state_1234',
+          timestamp: String(Math.floor(Date.now() / 1000)),
+        }, config.shopify.clientSecret);
+        const expiredRes = await fetchJSON(`http://localhost:${testPort}/api/shopify/auth/callback?${expiredQs}`);
+        assert(expiredRes.statusCode === 403, 'Expired state must return 403');
+        assert(expiredRes.body.message.includes('expired'), 'Expired state error message must report expiration');
+        console.log('✅ Test 7.5 Passed: Expired OAuth state rejected cleanly.');
+
+        // Test 7.6: env.js strips trailing slashes from BACKEND_URL
+        const prevEnvBackend = process.env.BACKEND_URL;
+        const envPath = require.resolve('../src/config/env');
+        const prevCachedEnv = require.cache[envPath];
+        try {
+          process.env.BACKEND_URL = 'https://abihacart-chatbot-backend.onrender.com/// ';
+          delete require.cache[envPath];
+          const freshConfig = require('../src/config/env');
+          assert(
+            freshConfig.urls.backendUrl === 'https://abihacart-chatbot-backend.onrender.com',
+            `env.js must strip trailing slashes, got ${freshConfig.urls.backendUrl}`
+          );
+          console.log('✅ Test 7.6 Passed: env.js normalizes trailing slashes in BACKEND_URL.');
+        } finally {
+          if (prevEnvBackend === undefined) delete process.env.BACKEND_URL;
+          else process.env.BACKEND_URL = prevEnvBackend;
+          require.cache[envPath] = prevCachedEnv;
+        }
+      } finally {
+        shopifyService.exchangeCodeForToken = origExchange;
+        SessionStore.clearMemory();
+        config.urls.backendUrl = origBackendUrl;
+        config.shopify.clientId = origClientId;
+        config.shopify.clientSecret = origClientSecret;
+      }
 
       console.log('\n====================================================');
       console.log('🎉 ALL PHASE 2 SHOPIFY AUTH TESTS PASSED (100%)');

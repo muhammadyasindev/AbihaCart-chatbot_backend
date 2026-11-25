@@ -6,9 +6,55 @@ const {
   generateNonce,
   verifyHmac,
   buildAuthorizationUrl,
+  parseCookies,
+  createSignedStateCookieValue,
+  verifySignedStateCookieValue,
 } = require('../utils/shopifyAuth');
 const shopifyService = require('../services/shopify.service');
 const { SessionStore } = require('../models/ShopifySession');
+
+const OAUTH_STATE_COOKIE = 'abihacart_oauth_state';
+const OAUTH_STATE_TTL_MS = 10 * 60 * 1000;
+
+const isSecureRequest = (req) => (
+  Boolean(req.secure) ||
+  String(req.headers['x-forwarded-proto'] || '').toLowerCase() === 'https' ||
+  config.env === 'production'
+);
+
+const setOAuthStateCookie = (req, res, { shop, state, expiresAtMs }) => {
+  const signedVal = createSignedStateCookieValue(
+    { shop, state, expiresAtMs },
+    config.shopify.clientSecret
+  );
+  if (!signedVal) return;
+
+  const parts = [
+    `${OAUTH_STATE_COOKIE}=${encodeURIComponent(signedVal)}`,
+    'Path=/api/shopify',
+    'HttpOnly',
+    'SameSite=Lax',
+    `Max-Age=${Math.floor(OAUTH_STATE_TTL_MS / 1000)}`,
+  ];
+  if (isSecureRequest(req)) {
+    parts.push('Secure');
+  }
+  res.setHeader('Set-Cookie', parts.join('; '));
+};
+
+const clearOAuthStateCookie = (req, res) => {
+  const parts = [
+    `${OAUTH_STATE_COOKIE}=`,
+    'Path=/api/shopify',
+    'HttpOnly',
+    'SameSite=Lax',
+    'Max-Age=0',
+  ];
+  if (isSecureRequest(req)) {
+    parts.push('Secure');
+  }
+  res.setHeader('Set-Cookie', parts.join('; '));
+};
 
 /**
  * Initiates the Shopify Authorization Code Grant OAuth flow.
@@ -16,6 +62,9 @@ const { SessionStore } = require('../models/ShopifySession');
  */
 const initiateAuth = async (req, res, next) => {
   try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+
     const rawShop = req.query.shop || config.shopify.shop;
     const shop = sanitizeShopDomain(rawShop);
 
@@ -39,13 +88,12 @@ const initiateAuth = async (req, res, next) => {
 
     // Generate cryptographic state nonce for CSRF protection
     const state = generateNonce();
-    const stateExpiresAt = new Date(Date.now() + 10 * 60 * 1000); // 10 minutes TTL
+    const expiresAtMs = Date.now() + OAUTH_STATE_TTL_MS;
+    const stateExpiresAt = new Date(expiresAtMs);
 
-    // Persist nonce to session store
-    await SessionStore.upsertSession(shop, {
-      state,
-      stateExpiresAt,
-    });
+    // Persist nonce without invalidating parallel OAuth initiation tabs/prefetches
+    await SessionStore.registerAuthState(shop, state, stateExpiresAt);
+    setOAuthStateCookie(req, res, { shop, state, expiresAtMs });
 
     const redirectUri = `${config.urls.backendUrl}/api/shopify/auth/callback`;
     const authUrl = buildAuthorizationUrl({
@@ -81,6 +129,9 @@ const initiateAuth = async (req, res, next) => {
  */
 const handleCallback = async (req, res, next) => {
   try {
+    res.set('Cache-Control', 'no-store, no-cache, must-revalidate, proxy-revalidate');
+    res.set('Pragma', 'no-cache');
+
     const { shop: rawShop, code, state, hmac } = req.query;
     const shop = sanitizeShopDomain(rawShop);
 
@@ -115,10 +166,39 @@ const handleCallback = async (req, res, next) => {
       });
     }
 
-    // 4. Validate CSRF state nonce against session store
-    const session = await SessionStore.findByShop(shop);
-    if (!session || !session.state || session.state !== state) {
-      logger.warn(`Security alert: State mismatch or session not found for shop: ${shop}`);
+    // 4. Validate CSRF state nonce against SessionStore (DB + memory) or signed HttpOnly browser cookie
+    const storeCheck = await SessionStore.findAuthState(shop, state);
+    const cookies = parseCookies(req.headers.cookie);
+    const cookieCheck = verifySignedStateCookieValue(
+      cookies[OAUTH_STATE_COOKIE],
+      config.shopify.clientSecret
+    );
+    const cookieMatches = (
+      cookieCheck.valid &&
+      cookieCheck.shop === shop &&
+      cookieCheck.state === state
+    );
+    const cookieExpired = cookieMatches && cookieCheck.expiresAtMs < Date.now();
+    const cookieValid = cookieMatches && !cookieExpired;
+
+    if (!storeCheck.matched && !cookieValid) {
+      if (storeCheck.expired || cookieExpired) {
+        logger.warn(`OAuth state expired for shop: ${shop}`);
+        return res.status(403).json({
+          status: 'fail',
+          error: 'Forbidden',
+          message: 'OAuth state nonce has expired. Please restart the authorization flow.',
+        });
+      }
+
+      logger.warn(`Security alert: State mismatch or session not found for shop: ${shop}`, {
+        hasSession: Boolean(storeCheck.session),
+        hasStoredState: Boolean(storeCheck.session?.state),
+        pendingStateCount: Array.isArray(storeCheck.session?.pendingStates)
+          ? storeCheck.session.pendingStates.length
+          : 0,
+        hasStateCookie: Boolean(cookies[OAUTH_STATE_COOKIE]),
+      });
       return res.status(403).json({
         status: 'fail',
         error: 'Forbidden',
@@ -126,19 +206,11 @@ const handleCallback = async (req, res, next) => {
       });
     }
 
-    if (session.stateExpiresAt && session.stateExpiresAt < new Date()) {
-      logger.warn(`OAuth state expired for shop: ${shop}`);
-      return res.status(403).json({
-        status: 'fail',
-        error: 'Forbidden',
-        message: 'OAuth state nonce has expired. Please restart the authorization flow.',
-      });
-    }
-
     // 5. Exchange authorization code for offline access token
     const tokenData = await shopifyService.exchangeCodeForToken({ shop, code });
 
-    // 6. Update session with secured token details (offline access)
+    // 6. Update session with secured token details (offline access) and clear pending nonces
+    SessionStore.clearMemoryState(shop);
     const updatedSession = await SessionStore.upsertSession(shop, {
       accessToken: tokenData.accessToken,
       scope: tokenData.scope,
@@ -148,9 +220,11 @@ const handleCallback = async (req, res, next) => {
         : null,
       state: null, // Clear state nonce after successful exchange
       stateExpiresAt: null,
+      pendingStates: [],
       isOnline: false, // Persistent offline access
     });
 
+    clearOAuthStateCookie(req, res);
     logger.info(`Shopify OAuth completed successfully for shop: ${shop}. Granted scopes: ${tokenData.scope}`);
 
     // Return success response without exposing tokens or secrets

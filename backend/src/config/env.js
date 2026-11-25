@@ -56,8 +56,8 @@ const config = {
   },
 
   urls: {
-    frontendUrl: (process.env.FRONTEND_URL || 'https://abihacart.myshopify.com').trim(),
-    backendUrl: (process.env.BACKEND_URL || 'http://localhost:5000').trim(),
+    frontendUrl: (process.env.FRONTEND_URL || 'https://abihacart.myshopify.com').trim().replace(/\/+$/, ''),
+    backendUrl: (process.env.BACKEND_URL || 'http://localhost:5000').trim().replace(/\/+$/, ''),
     allowedOrigins: (process.env.ALLOWED_ORIGINS || '')
       .split(',')
       .map((s) => s.trim())
