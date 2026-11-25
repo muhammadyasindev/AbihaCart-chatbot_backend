@@ -68,6 +68,7 @@ const testShopifyConnection = async (req, res, next) => {
     // Run connection test and retrieve shop metadata + small product sample
     logger.info(`Running Shopify GraphQL connection test for ${shop}...`);
     const connectionResult = await shopifyService.testConnection(shop);
+    const updatedSession = (await SessionStore.findByShop(shop)) || session;
 
     return res.status(200).json({
       status: 'connected',
@@ -75,7 +76,7 @@ const testShopifyConnection = async (req, res, next) => {
       apiVersion: config.shopify.apiVersion,
       productSampleCount: connectionResult.productSampleCount,
       sampleProducts: connectionResult.sampleProducts,
-      session: session.toSafeObject(),
+      session: updatedSession.toSafeObject(),
       timestamp: connectionResult.timestamp,
     });
   } catch (error) {

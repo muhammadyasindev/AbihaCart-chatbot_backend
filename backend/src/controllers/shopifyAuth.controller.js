@@ -241,6 +241,9 @@ const handleCallback = async (req, res, next) => {
       expiresAt: tokenData.expiresIn
         ? new Date(Date.now() + tokenData.expiresIn * 1000)
         : null,
+      refreshTokenExpiresAt: tokenData.refreshTokenExpiresIn
+        ? new Date(Date.now() + tokenData.refreshTokenExpiresIn * 1000)
+        : null,
       canonicalShop: shop,
       state: null, // Clear state nonce after successful exchange
       stateExpiresAt: null,

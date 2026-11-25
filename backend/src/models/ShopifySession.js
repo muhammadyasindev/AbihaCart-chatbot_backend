@@ -27,6 +27,10 @@ const ShopifySessionSchema = new mongoose.Schema({
     type: Date,
     default: null,
   },
+  refreshTokenExpiresAt: {
+    type: Date,
+    default: null,
+  },
   scope: {
     type: String,
     required: true,

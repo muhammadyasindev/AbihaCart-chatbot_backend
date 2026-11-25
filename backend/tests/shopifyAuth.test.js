@@ -458,6 +458,127 @@ const runAllTests = async () => {
         }
       } finally {
         shopifyService.exchangeCodeForToken = origExchange;
+      }
+
+      // Test 7.10: real exchangeCodeForToken sends expiring=1 and form-urlencoded payload
+      const origFetchExpiring = global.fetch;
+      const origServiceClientId = shopifyService.clientId;
+      const origServiceSecret = shopifyService.clientSecret;
+      shopifyService.clientId = config.shopify.clientId;
+      shopifyService.clientSecret = config.shopify.clientSecret;
+      global.fetch = async (url, init) => {
+        if (String(url).includes('/admin/oauth/access_token')) {
+          const bodyParams = new URLSearchParams(init.body);
+          if (bodyParams.get('grant_type') === 'urn:ietf:params:oauth:grant-type:token-exchange') {
+            assert(
+              bodyParams.get('subject_token') === 'shpat_legacy_permanent_token' &&
+              bodyParams.get('subject_token_type') === 'urn:shopify:params:oauth:token-type:offline-access-token' &&
+              bodyParams.get('requested_token_type') === 'urn:shopify:params:oauth:token-type:offline-access-token' &&
+              bodyParams.get('expiring') === '1',
+              'Token exchange migration must send exact form-urlencoded parameters with expiring=1'
+            );
+            return {
+              ok: true,
+              status: 200,
+              json: async () => ({
+                access_token: 'shpua_migrated_expiring_token',
+                expires_in: 3600,
+                refresh_token: 'shprt_migrated_refresh_token',
+                refresh_token_expires_in: 5184000,
+                scope: 'read_products,read_orders',
+              }),
+            };
+          }
+          assert(
+            init.headers['Content-Type'] === 'application/x-www-form-urlencoded' &&
+            bodyParams.get('expiring') === '1' &&
+            bodyParams.get('code') === 'code_expiring_123',
+            'exchangeCodeForToken must send expiring=1 via x-www-form-urlencoded'
+          );
+          return {
+            ok: true,
+            status: 200,
+            json: async () => ({
+              access_token: 'shpua_fresh_expiring_token',
+              expires_in: 3599,
+              refresh_token: 'shprt_fresh_refresh_token',
+              refresh_token_expires_in: 5184000,
+              scope: 'read_products,write_orders',
+            }),
+          };
+        }
+
+        if (init.headers['X-Shopify-Access-Token'] === 'shpat_legacy_permanent_token') {
+          return {
+            ok: false,
+            status: 403,
+            text: async () => JSON.stringify({
+              errors: '[API] Non-expiring access tokens are no longer accepted for the Admin API.',
+            }),
+          };
+        }
+
+        return {
+          ok: true,
+          status: 200,
+          json: async () => ({
+            data: {
+              shop: {
+                name: 'Abihacart',
+                myshopifyDomain: 'dwpaps-9q.myshopify.com',
+                primaryDomain: { url: 'https://abihacart.myshopify.com', host: 'abihacart.myshopify.com' },
+                currencyCode: 'AED',
+                plan: { displayName: 'Development' },
+              },
+              products: { edges: [] },
+            },
+          }),
+        };
+      };
+
+      try {
+        const exchanged = await shopifyService.exchangeCodeForToken({
+          shop: 'dwpaps-9q.myshopify.com',
+          code: 'code_expiring_123',
+        });
+        assert(
+          exchanged.accessToken === 'shpua_fresh_expiring_token' &&
+          exchanged.refreshToken === 'shprt_fresh_refresh_token' &&
+          exchanged.expiresIn === 3599,
+          'exchangeCodeForToken must parse expiring token pair'
+        );
+
+        // Test 7.11: Auto-migration from legacy non-expiring offline token when Shopify returns 403
+        await SessionStore.upsertSession('dwpaps-9q.myshopify.com', {
+          accessToken: 'shpat_legacy_permanent_token',
+          scope: 'read_products',
+          canonicalShop: 'dwpaps-9q.myshopify.com',
+          expiresAt: null,
+          refreshToken: null,
+          isOnline: false,
+        });
+        await SessionStore.upsertSession('abihacart.myshopify.com', {
+          accessToken: 'shpat_legacy_permanent_token',
+          scope: 'read_products',
+          canonicalShop: 'dwpaps-9q.myshopify.com',
+          expiresAt: null,
+          refreshToken: null,
+          isOnline: false,
+        });
+
+        const migratedConnRes = await fetchJSON(`http://localhost:${testPort}/api/shopify/test-connection?shop=abihacart.myshopify.com`);
+        assert(
+          migratedConnRes.statusCode === 200 &&
+          migratedConnRes.body.status === 'connected' &&
+          migratedConnRes.body.session.hasRefreshToken === true &&
+          Boolean(migratedConnRes.body.session.expiresAt),
+          `Auto-migration should recover 403 and return connected 200, got ${migratedConnRes.statusCode}`
+        );
+        console.log('✅ Test 7.10-7.11 Passed: OAuth expiring=1 exchange and legacy token auto-migration verified.');
+      } finally {
+        global.fetch = origFetchExpiring;
+        shopifyService.clientId = origServiceClientId;
+        shopifyService.clientSecret = origServiceSecret;
         SessionStore.clearMemory();
         config.urls.backendUrl = origBackendUrl;
         config.shopify.clientId = origClientId;

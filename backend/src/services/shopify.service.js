@@ -14,39 +14,39 @@ class ShopifyService {
   }
 
   /**
-   * Exchanges an OAuth authorization code for an offline access token
+   * Sends a form-urlencoded OAuth token request to Shopify /admin/oauth/access_token.
    * @param {Object} params
    * @param {string} params.shop
-   * @param {string} params.code
-   * @returns {Promise<Object>} { accessToken, scope, expiresIn, refreshToken }
+   * @param {Object} params.payload
+   * @param {string} params.actionLabel
+   * @returns {Promise<Object>}
    */
-  async exchangeCodeForToken({ shop, code }) {
+  async postOAuthTokenRequest({ shop, payload, actionLabel = 'token request' }) {
     if (!this.clientId || !this.clientSecret) {
       throw new Error('SHOPIFY_CLIENT_ID or SHOPIFY_CLIENT_SECRET is not configured.');
     }
 
     const tokenUrl = `https://${shop}/admin/oauth/access_token`;
-    const payload = {
+    const body = new URLSearchParams({
       client_id: this.clientId,
       client_secret: this.clientSecret,
-      code,
-    };
-
-    logger.info(`Exchanging OAuth authorization code for access token on ${shop}...`);
+      ...payload,
+    }).toString();
 
     const response = await fetch(tokenUrl, {
       method: 'POST',
       headers: {
-        'Content-Type': 'application/json',
+        'Content-Type': 'application/x-www-form-urlencoded',
         Accept: 'application/json',
+        'User-Agent': 'Abihacart-AI-Support/1.0',
       },
-      body: JSON.stringify(payload),
+      body,
     });
 
     if (!response.ok) {
       const errorText = await response.text();
-      logger.error(`Shopify token exchange failed with status ${response.status}: ${errorText}`);
-      throw new Error(`Shopify OAuth token exchange failed (HTTP ${response.status})`);
+      logger.error(`Shopify ${actionLabel} failed with status ${response.status}: ${errorText}`);
+      throw new Error(`Shopify OAuth ${actionLabel} failed (HTTP ${response.status})`);
     }
 
     const data = await response.json();
@@ -55,53 +55,97 @@ class ShopifyService {
       scope: data.scope,
       expiresIn: data.expires_in || null,
       refreshToken: data.refresh_token || null,
+      refreshTokenExpiresIn: data.refresh_token_expires_in || null,
     };
   }
 
   /**
-   * Refreshes an expiring offline access token using the stored refresh token
+   * Exchanges an OAuth authorization code for an expiring offline access token (expiring=1).
+   * @param {Object} params
+   * @param {string} params.shop
+   * @param {string} params.code
+   * @returns {Promise<Object>} { accessToken, scope, expiresIn, refreshToken, refreshTokenExpiresIn }
+   */
+  async exchangeCodeForToken({ shop, code }) {
+    logger.info(`Exchanging OAuth authorization code for expiring offline token on ${shop}...`);
+    return this.postOAuthTokenRequest({
+      shop,
+      actionLabel: 'token exchange',
+      payload: {
+        code,
+        expiring: '1',
+      },
+    });
+  }
+
+  /**
+   * Refreshes an expiring offline access token using the stored refresh token.
    * @param {Object} params
    * @param {string} params.shop
    * @param {string} params.refreshToken
    * @returns {Promise<Object>}
    */
   async refreshAccessToken({ shop, refreshToken }) {
-    if (!this.clientId || !this.clientSecret) {
-      throw new Error('SHOPIFY_CLIENT_ID or SHOPIFY_CLIENT_SECRET is missing for token refresh.');
-    }
-
-    const tokenUrl = `https://${shop}/admin/oauth/access_token`;
-    const payload = {
-      client_id: this.clientId,
-      client_secret: this.clientSecret,
-      grant_type: 'refresh_token',
-      refresh_token: refreshToken,
-    };
-
     logger.info(`Refreshing expiring access token for ${shop}...`);
-
-    const response = await fetch(tokenUrl, {
-      method: 'POST',
-      headers: {
-        'Content-Type': 'application/json',
-        Accept: 'application/json',
+    return this.postOAuthTokenRequest({
+      shop,
+      actionLabel: 'token refresh',
+      payload: {
+        grant_type: 'refresh_token',
+        refresh_token: refreshToken,
       },
-      body: JSON.stringify(payload),
     });
+  }
 
-    if (!response.ok) {
-      const errorText = await response.text();
-      logger.error(`Shopify token refresh failed with status ${response.status}: ${errorText}`);
-      throw new Error(`Shopify token refresh failed (HTTP ${response.status})`);
-    }
+  /**
+   * Migrates a legacy non-expiring offline access token to an expiring token pair via token exchange.
+   * @param {Object} params
+   * @param {string} params.shop
+   * @param {string} params.nonExpiringToken
+   * @returns {Promise<Object>}
+   */
+  async migrateToExpiringToken({ shop, nonExpiringToken }) {
+    logger.info(`Migrating legacy non-expiring offline token to expiring token pair for ${shop}...`);
+    return this.postOAuthTokenRequest({
+      shop,
+      actionLabel: 'expiring token migration',
+      payload: {
+        grant_type: 'urn:ietf:params:oauth:grant-type:token-exchange',
+        subject_token: nonExpiringToken,
+        subject_token_type: 'urn:shopify:params:oauth:token-type:offline-access-token',
+        requested_token_type: 'urn:shopify:params:oauth:token-type:offline-access-token',
+        expiring: '1',
+      },
+    });
+  }
 
-    const data = await response.json();
-    return {
-      accessToken: data.access_token,
-      scope: data.scope,
-      expiresIn: data.expires_in || null,
-      refreshToken: data.refresh_token || refreshToken,
+  /**
+   * Persists refreshed/migrated token credentials across primary and alias session records.
+   */
+  async persistTokenPair({ shop, session, tokenData }) {
+    const updatePayload = {
+      accessToken: tokenData.accessToken,
+      refreshToken: tokenData.refreshToken || session.refreshToken || null,
+      expiresAt: tokenData.expiresIn ? new Date(Date.now() + tokenData.expiresIn * 1000) : null,
+      refreshTokenExpiresAt: tokenData.refreshTokenExpiresIn
+        ? new Date(Date.now() + tokenData.refreshTokenExpiresIn * 1000)
+        : (session.refreshTokenExpiresAt || null),
+      ...(tokenData.scope ? { scope: tokenData.scope } : {}),
     };
+
+    const updated = await SessionStore.upsertSession(shop, updatePayload);
+    const canonical = session.canonicalShop;
+    if (canonical && canonical !== shop) {
+      await SessionStore.upsertSession(canonical, updatePayload);
+    }
+    const configured = (config.shopify.shop || '').trim().toLowerCase();
+    if (configured && configured !== shop && configured !== canonical) {
+      const aliasSession = await SessionStore.findByShop(configured);
+      if (aliasSession && aliasSession.canonicalShop === (canonical || shop)) {
+        await SessionStore.upsertSession(configured, updatePayload);
+      }
+    }
+    return updated;
   }
 
   /**
@@ -125,19 +169,7 @@ class ShopifyService {
           refreshToken: session.refreshToken,
         });
 
-        const updated = await SessionStore.upsertSession(shop, {
-          accessToken: refreshed.accessToken,
-          refreshToken: refreshed.refreshToken,
-          expiresAt: refreshed.expiresIn ? new Date(Date.now() + refreshed.expiresIn * 1000) : null,
-        });
-        if (targetShop !== shop) {
-          await SessionStore.upsertSession(targetShop, {
-            accessToken: refreshed.accessToken,
-            refreshToken: refreshed.refreshToken,
-            expiresAt: refreshed.expiresIn ? new Date(Date.now() + refreshed.expiresIn * 1000) : null,
-          });
-        }
-
+        const updated = await this.persistTokenPair({ shop, session, tokenData: refreshed });
         return updated.accessToken;
       }
       throw new Error(`Access token expired for ${shop} and no refresh token is present. Re-authentication required.`);
@@ -153,9 +185,10 @@ class ShopifyService {
    * @param {Object} [options.variables] - GraphQL variables
    * @param {string} [options.shop] - Target store domain
    * @param {number} [options.retries=3] - Remaining retry count for throttled queries
+   * @param {boolean} [options.hasAttemptedExpiringMigration=false] - Internal guard against infinite migration loops
    * @returns {Promise<Object>} GraphQL response data
    */
-  async graphql({ query, variables = {}, shop = config.shopify.shop, retries = 3 }) {
+  async graphql({ query, variables = {}, shop = config.shopify.shop, retries = 3, hasAttemptedExpiringMigration = false }) {
     const accessToken = await this.getValidAccessToken(shop);
     const session = await SessionStore.findByShop(shop);
     const targetShop = (session && session.canonicalShop) || shop;
@@ -191,7 +224,31 @@ class ShopifyService {
             .trim()
             .slice(0, 200);
         }
-        shopifyReason = shopifyReason.replace(/shp(at|ss|rf|ca|pa)_[A-Za-z0-9_-]+/g, '[REDACTED]');
+        shopifyReason = shopifyReason.replace(/shp(at|ss|rf|ca|pa|ua|rt)_[A-Za-z0-9_-]+/g, '[REDACTED]');
+
+        // Auto-migrate legacy non-expiring offline tokens when Shopify enforces expiring offline tokens
+        const isLegacyNonExpiringRejection = (
+          response.status === 403 &&
+          !hasAttemptedExpiringMigration &&
+          session &&
+          !session.isOnline &&
+          !session.refreshToken &&
+          /non-expiring access tokens are no longer accepted/i.test(shopifyReason)
+        );
+        if (isLegacyNonExpiringRejection) {
+          const migrated = await this.migrateToExpiringToken({
+            shop: targetShop,
+            nonExpiringToken: accessToken,
+          });
+          await this.persistTokenPair({ shop, session, tokenData: migrated });
+          return this.graphql({
+            query,
+            variables,
+            shop,
+            retries,
+            hasAttemptedExpiringMigration: true,
+          });
+        }
 
         logger.error(`Shopify authentication/authorization failure (${response.status}): ${errorText}`);
         const err = new Error(
