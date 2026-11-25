@@ -7,6 +7,7 @@ const path = require('path');
 
 const testSuites = [
   'health.test.js',
+  'embeddedAppHeaders.test.js',
   'server.test.js',
   'shopifyAuth.test.js',
   'storeDataAndWebhooks.test.js',

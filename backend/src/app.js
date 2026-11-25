@@ -6,6 +6,7 @@ const fs = require('fs');
 const logger = require('./utils/logger');
 const config = require('./config/env');
 const errorHandler = require('./middleware/errorHandler');
+const { isValidShopDomain, sanitizeShopDomain } = require('./utils/shopifyAuth');
 const healthRoutes = require('./routes/health.routes');
 const shopifyRoutes = require('./routes/shopify.routes');
 const webhookRoutes = require('./routes/webhook.routes');
@@ -77,9 +78,175 @@ app.use((req, res, next) => {
   next();
 });
 
-// Root ping
-app.get('/', (req, res) => {
-  res.json({
+const escapeHtml = (value) => String(value || '')
+  .replace(/&/g, '&amp;')
+  .replace(/</g, '&lt;')
+  .replace(/>/g, '&gt;')
+  .replace(/"/g, '&quot;')
+  .replace(/'/g, '&#39;');
+
+const getConfiguredShopDomain = () => {
+  const sanitized = sanitizeShopDomain(config.shopify.shop || 'abihacart.myshopify.com');
+  return isValidShopDomain(sanitized) ? sanitized : 'abihacart.myshopify.com';
+};
+
+const getEmbeddedFrameAncestors = () => [
+  `https://${getConfiguredShopDomain()}`,
+  'https://admin.shopify.com',
+];
+
+const embeddedAppSecurityHeaders = (req, res, next) => {
+  // Override X-Frame-Options and CSP frame-ancestors strictly for the embedded Shopify app route
+  res.removeHeader('X-Frame-Options');
+  const frameAncestors = getEmbeddedFrameAncestors();
+
+  return helmet.contentSecurityPolicy({
+    directives: {
+      defaultSrc: ["'self'"],
+      baseUri: ["'self'"],
+      fontSrc: ["'self'", 'https:', 'data:'],
+      formAction: ["'self'"],
+      frameAncestors,
+      imgSrc: ["'self'", 'data:', 'https://cdn.shopify.com'],
+      objectSrc: ["'none'"],
+      scriptSrc: ["'self'", 'https://cdn.shopify.com'],
+      scriptSrcAttr: ["'none'"],
+      styleSrc: ["'self'", 'https:', "'unsafe-inline'"],
+      connectSrc: ["'self'", ...frameAncestors, 'https://cdn.shopify.com'],
+    },
+  })(req, res, next);
+};
+
+const renderEmbeddedAppHtml = () => {
+  const shop = getConfiguredShopDomain();
+  const safeShop = escapeHtml(shop);
+  const safeClientId = escapeHtml(config.shopify.clientId || '');
+  const appBridgeTag = safeClientId
+    ? `<meta name="shopify-api-key" content="${safeClientId}" />\n  <script src="https://cdn.shopify.com/shopifycloud/app-bridge.js"></script>`
+    : '';
+
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  ${appBridgeTag}
+  <title>Abihacart AI Customer Support</title>
+  <style>
+    * { box-sizing: border-box; margin: 0; padding: 0; }
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
+      background: #f6f6f7;
+      color: #202223;
+      padding: 28px 20px;
+      line-height: 1.5;
+    }
+    .container {
+      max-width: 720px;
+      margin: 0 auto;
+      background: #ffffff;
+      border: 1px solid #e1e3e5;
+      border-radius: 12px;
+      padding: 24px 28px;
+      box-shadow: 0 2px 8px rgba(0, 0, 0, 0.04);
+    }
+    .header {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      gap: 12px;
+      padding-bottom: 16px;
+      border-bottom: 1px solid #e1e3e5;
+      margin-bottom: 18px;
+      flex-wrap: wrap;
+    }
+    h1 { font-size: 20px; font-weight: 700; color: #111827; }
+    .badge {
+      display: inline-block;
+      background: #e3f1df;
+      color: #005b34;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 4px 10px;
+      border-radius: 999px;
+    }
+    .grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+      gap: 14px;
+      margin-bottom: 20px;
+    }
+    .card {
+      background: #fafbfb;
+      border: 1px solid #e5e7eb;
+      border-radius: 8px;
+      padding: 14px 16px;
+    }
+    .label { font-size: 12px; color: #6d7175; margin-bottom: 4px; }
+    .value { font-size: 14px; font-weight: 600; color: #111827; word-break: break-word; }
+    .actions { display: flex; gap: 10px; flex-wrap: wrap; }
+    .btn {
+      display: inline-block;
+      padding: 9px 16px;
+      border-radius: 8px;
+      font-size: 13px;
+      font-weight: 600;
+      text-decoration: none;
+      border: 1px solid #c9cccf;
+      color: #202223;
+      background: #ffffff;
+    }
+    .btn-primary {
+      background: #008060;
+      border-color: #008060;
+      color: #ffffff;
+    }
+  </style>
+</head>
+<body>
+  <main class="container">
+    <div class="header">
+      <h1>Abihacart AI Customer Support</h1>
+      <span class="badge">Embedded App Active</span>
+    </div>
+    <div class="grid">
+      <div class="card">
+        <div class="label">Connected Store</div>
+        <div class="value">${safeShop}</div>
+      </div>
+      <div class="card">
+        <div class="label">Order Confirmation Extension</div>
+        <div class="value">Checkout Thank You &amp; Order Status Ready</div>
+      </div>
+      <div class="card">
+        <div class="label">API Status</div>
+        <div class="value">Operational</div>
+      </div>
+    </div>
+    <div class="actions">
+      <a class="btn btn-primary" href="/api/shopify/auth?shop=${encodeURIComponent(shop)}" target="_top">Authorize Store Connection</a>
+      <a class="btn" href="/api/shopify/test-connection?shop=${encodeURIComponent(shop)}" target="_blank" rel="noopener noreferrer">Check Connection Status</a>
+      <a class="btn" href="/api/health" target="_blank" rel="noopener noreferrer">System Health</a>
+    </div>
+  </main>
+</body>
+</html>`;
+};
+
+// Shopify Embedded App entry & Root API ping
+app.get('/', embeddedAppSecurityHeaders, (req, res) => {
+  const accept = String(req.headers.accept || '');
+  const isEmbeddedRequest =
+    req.query.embedded === '1' ||
+    Boolean(req.query.host) ||
+    (Boolean(req.query.shop) && !accept.includes('application/json'));
+  const prefersHtml = accept.includes('text/html') && !accept.includes('application/json');
+
+  if (isEmbeddedRequest || prefersHtml) {
+    return res.status(200).type('html').send(renderEmbeddedAppHtml());
+  }
+
+  return res.json({
     message: 'Abihacart AI Customer Support API is operational',
     store: config.shopify.shop,
     health: '/api/health',
