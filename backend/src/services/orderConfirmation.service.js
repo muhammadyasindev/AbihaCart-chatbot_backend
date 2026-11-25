@@ -4,6 +4,24 @@ const emailNotificationService = require('./emailNotification.service');
 const config = require('../config/env');
 const logger = require('../utils/logger');
 
+/**
+ * Normalizes a Shopify numeric ID or Order/OrderIdentity GID to its trailing numeric ID.
+ * Returns null for malformed or non-Order GIDs.
+ */
+const normalizeShopifyOrderIdInput = (rawOrderId) => {
+  if (rawOrderId === undefined || rawOrderId === null) return null;
+  const trimmed = String(rawOrderId).trim();
+  if (!trimmed) return null;
+  if (/^\d+$/.test(trimmed)) return trimmed;
+  const gidMatch = trimmed.match(/^gid:\/\/shopify\/(?:Order|OrderIdentity)\/(\d+)$/i);
+  return gidMatch ? gidMatch[1] : null;
+};
+
+const normalizeOrderNumberInput = (rawOrderNumber) => {
+  if (!rawOrderNumber) return '';
+  return String(rawOrderNumber).trim().replace(/^#/, '').toLowerCase();
+};
+
 class OrderConfirmationService {
   /**
    * Formats the customer order confirmation SMS message
@@ -239,7 +257,7 @@ If you did not place this order, please ignore this message.`;
    * Confirms a Shopify order using the customer's secure single-use token (Atomic & Idempotent)
    * Prevents duplicate confirmations, enforces 30-min TTL, and notifies store owner via Resend
    */
-  async confirmOrderWithToken(token) {
+  async confirmOrderWithToken(token, options = {}) {
     if (!token) {
       return {
         success: false,
@@ -273,6 +291,19 @@ If you did not place this order, please ignore this message.`;
       };
     }
 
+    // Bind optional orderId / GID strictly to the signed token's order ID
+    if (options.orderId !== undefined && options.orderId !== null && String(options.orderId).trim() !== '') {
+      const normalizedOrderId = normalizeShopifyOrderIdInput(options.orderId);
+      if (!normalizedOrderId || normalizedOrderId !== String(verification.shopifyOrderId)) {
+        return {
+          success: false,
+          statusCode: 403,
+          code: 'ORDER_TOKEN_MISMATCH',
+          message: 'Order identifier does not match the signed confirmation token.',
+        };
+      }
+    }
+
     // 2. Locate Pending Confirmation Record
     const record = await ShopifyOrderConfirmationStore.findByShopifyOrderId(verification.shopifyOrderId);
     if (!record) {
@@ -281,6 +312,15 @@ If you did not place this order, please ignore this message.`;
         statusCode: 404,
         code: 'ORDER_NOT_FOUND',
         message: 'Order confirmation record not found.',
+      };
+    }
+
+    if (options.orderNumber && normalizeOrderNumberInput(options.orderNumber) !== normalizeOrderNumberInput(record.orderNumber)) {
+      return {
+        success: false,
+        statusCode: 403,
+        code: 'ORDER_TOKEN_MISMATCH',
+        message: 'Order number does not match the signed confirmation token.',
       };
     }
 
@@ -365,7 +405,8 @@ If you did not place this order, please ignore this message.`;
 
     // 2. If record not located yet and orderId / orderNumber supplied
     if (!record && orderId) {
-      record = await ShopifyOrderConfirmationStore.findByShopifyOrderId(String(orderId));
+      const normalizedOrderId = normalizeShopifyOrderIdInput(orderId) || String(orderId).trim();
+      record = await ShopifyOrderConfirmationStore.findByShopifyOrderId(normalizedOrderId);
     }
     if (!record && orderNumber) {
       record = await ShopifyOrderConfirmationStore.findByOrderNumber(String(orderNumber));
@@ -387,7 +428,7 @@ If you did not place this order, please ignore this message.`;
       const recordPhoneDigits = (record.customerPhone || '').replace(/\D/g, '');
       const phoneMatches = phoneDigits.length >= 7 && recordPhoneDigits.includes(phoneDigits.slice(-7));
 
-      if (!emailMatches && !phoneMatches && !token) {
+      if (!emailMatches && !phoneMatches) {
         return {
           success: false,
           statusCode: 403,
@@ -406,41 +447,53 @@ If you did not place this order, please ignore this message.`;
   }
 
   /**
-   * Cancels a Shopify order using the customer's secure single-use token or verified request
-   * Atomically transitions status to 'cancelled', records reason & timestamp, and notifies store owner
+   * Cancels a Shopify order strictly via signed single-use token verification.
+   * Rejects tokenless orderId/orderNumber cancellation attempts and binds optional orderId/GID strictly to the token.
    */
   async cancelOrderWithToken(token, reason = 'Customer requested cancellation via popup', options = {}) {
-    if (!token && !options.orderId) {
+    if (!token || typeof token !== 'string' || !token.trim()) {
       return {
         success: false,
         statusCode: 400,
         code: 'MISSING_TOKEN',
-        message: 'Order confirmation token or order ID is required.',
+        message: 'A valid signed order confirmation token is required to cancel this order.',
       };
     }
 
-    let shopifyOrderId = null;
-    if (token) {
-      const verification = ShopifyOrderConfirmationStore.verifyToken(token);
-      if (!verification.valid) {
-        if (verification.reason === 'token_expired') {
-          return {
-            success: false,
-            statusCode: 410,
-            code: 'TOKEN_EXPIRED',
-            message: 'This cancellation link has expired.',
-          };
+    const verification = ShopifyOrderConfirmationStore.verifyToken(token.trim());
+    if (!verification.valid) {
+      if (verification.reason === 'token_expired') {
+        if (verification.shopifyOrderId) {
+          await ShopifyOrderConfirmationStore.update(verification.shopifyOrderId, { status: 'expired' });
         }
         return {
           success: false,
-          statusCode: 403,
-          code: 'INVALID_TOKEN',
-          message: 'The confirmation token is invalid or has been tampered with.',
+          statusCode: 410,
+          code: 'TOKEN_EXPIRED',
+          message: 'This cancellation link has expired.',
         };
       }
-      shopifyOrderId = verification.shopifyOrderId;
-    } else {
-      shopifyOrderId = String(options.orderId);
+      return {
+        success: false,
+        statusCode: 403,
+        code: 'INVALID_TOKEN',
+        message: 'The confirmation token is invalid or has been tampered with.',
+      };
+    }
+
+    const shopifyOrderId = String(verification.shopifyOrderId);
+
+    // Ensure supplied orderId / GID (if any) cannot reference another customer's order
+    if (options.orderId !== undefined && options.orderId !== null && String(options.orderId).trim() !== '') {
+      const normalizedProvidedOrderId = normalizeShopifyOrderIdInput(options.orderId);
+      if (!normalizedProvidedOrderId || normalizedProvidedOrderId !== shopifyOrderId) {
+        return {
+          success: false,
+          statusCode: 403,
+          code: 'ORDER_TOKEN_MISMATCH',
+          message: 'Order identifier does not match the signed confirmation token.',
+        };
+      }
     }
 
     const record = await ShopifyOrderConfirmationStore.findByShopifyOrderId(shopifyOrderId);
@@ -450,6 +503,15 @@ If you did not place this order, please ignore this message.`;
         statusCode: 404,
         code: 'ORDER_NOT_FOUND',
         message: 'Order confirmation record not found.',
+      };
+    }
+
+    if (options.orderNumber && normalizeOrderNumberInput(options.orderNumber) !== normalizeOrderNumberInput(record.orderNumber)) {
+      return {
+        success: false,
+        statusCode: 403,
+        code: 'ORDER_TOKEN_MISMATCH',
+        message: 'Order number does not match the signed confirmation token.',
       };
     }
 
@@ -465,32 +527,86 @@ If you did not place this order, please ignore this message.`;
       };
     }
 
-    // Check if Shopify cancellation via Admin API is possible
+    // Attempt real Shopify Admin API order cancellation using auto-refreshed expiring token & canonical shop domain
     let isShopifyCancelled = false;
     let cancellationStatus = 'requested';
+    let shopifyApiError = null;
 
     try {
+      const targetShop = record.shop || config.shopify.shop;
       const { SessionStore } = require('../models/ShopifySession');
-      const session = await SessionStore.findByShop(record.shop || config.shopify.shop);
+      const shopifyService = require('./shopify.service');
+      const session = await SessionStore.findByShop(targetShop);
+
       if (session && session.accessToken) {
-        const cancelUrl = `https://${record.shop || config.shopify.shop}/admin/api/${config.shopify.apiVersion}/orders/${record.shopifyOrderId}/cancel.json`;
-        const resp = await fetch(cancelUrl, {
+        const accessToken = await shopifyService.getValidAccessToken(targetShop);
+        const latestSession = (await SessionStore.findByShop(targetShop)) || session;
+        const apiShop = latestSession.canonicalShop || targetShop;
+        const numericOrderId = normalizeShopifyOrderIdInput(record.shopifyOrderId) || String(record.shopifyOrderId);
+        const cancelUrl = `https://${apiShop}/admin/api/${config.shopify.apiVersion}/orders/${numericOrderId}/cancel.json`;
+
+        const performShopifyCancel = (tokenToUse) => fetch(cancelUrl, {
           method: 'POST',
           headers: {
-            'X-Shopify-Access-Token': session.accessToken,
+            'X-Shopify-Access-Token': tokenToUse,
             'Content-Type': 'application/json',
+            Accept: 'application/json',
+            'User-Agent': 'Abihacart-AI-Support/1.0',
           },
           body: JSON.stringify({ reason: 'customer', email: true }),
         });
+
+        let resp = await performShopifyCancel(accessToken);
+
+        if (resp.status === 401 && latestSession.refreshToken) {
+          logger.info(`Shopify cancel returned 401 for order [${numericOrderId}]. Refreshing expiring access token on ${apiShop}.`);
+          const refreshed = await shopifyService.refreshAccessToken({
+            shop: apiShop,
+            refreshToken: latestSession.refreshToken,
+          });
+          const updated = await shopifyService.persistTokenPair({
+            shop: targetShop,
+            session: latestSession,
+            tokenData: refreshed,
+          });
+          resp = await performShopifyCancel(updated.accessToken);
+        } else if (resp.status === 403 && !latestSession.refreshToken) {
+          const forbiddenText = await resp.text().catch(() => '');
+          if (/non-expiring access tokens are no longer accepted/i.test(forbiddenText)) {
+            const migrated = await shopifyService.migrateToExpiringToken({
+              shop: apiShop,
+              nonExpiringToken: accessToken,
+            });
+            const updated = await shopifyService.persistTokenPair({
+              shop: targetShop,
+              session: latestSession,
+              tokenData: migrated,
+            });
+            resp = await performShopifyCancel(updated.accessToken);
+          } else {
+            shopifyApiError = `Shopify Admin API error (403): ${forbiddenText.slice(0, 200)}`;
+            logger.warn(`Shopify cancellation returned 403 for order [${numericOrderId}]: ${forbiddenText}`);
+          }
+        } else if (!resp.ok) {
+          const errText = await resp.text().catch(() => '');
+          shopifyApiError = `Shopify Admin API error (${resp.status})${errText ? `: ${errText.slice(0, 200)}` : ''}`;
+          logger.warn(`Shopify cancellation request returned status ${resp.status} for order [${numericOrderId}]: ${errText}`);
+        }
+
         if (resp.ok) {
           isShopifyCancelled = true;
           cancellationStatus = 'shopify_cancelled';
-          logger.info(`Successfully cancelled order [${record.shopifyOrderId}] in Shopify Admin API.`);
-        } else {
-          logger.warn(`Shopify cancellation request returned status ${resp.status}. Recording as cancellation request for merchant review.`);
+          logger.info(`Successfully cancelled order [${record.shopifyOrderId}] in Shopify Admin API (${apiShop}).`);
+        } else if (!shopifyApiError) {
+          const errText = await resp.text().catch(() => '');
+          shopifyApiError = `Shopify Admin API error (${resp.status})${errText ? `: ${errText.slice(0, 200)}` : ''}`;
+          logger.warn(`Shopify cancellation request failed with status ${resp.status} after token retry.`);
         }
+      } else {
+        shopifyApiError = 'No active Shopify Admin API session found for shop.';
       }
     } catch (apiErr) {
+      shopifyApiError = apiErr.message;
       logger.warn(`Shopify Admin API cancellation skipped/failed: ${apiErr.message}. Recording cancellation request.`);
     }
 
@@ -522,6 +638,7 @@ If you did not place this order, please ignore this message.`;
       success: true,
       alreadyCancelled: false,
       isShopifyCancelled,
+      ...(shopifyApiError && !isShopifyCancelled ? { shopifyApiError } : {}),
       statusCode: 200,
       message: isShopifyCancelled
         ? 'Your order has been cancelled successfully.'

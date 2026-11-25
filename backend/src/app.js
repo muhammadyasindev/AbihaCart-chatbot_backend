@@ -23,7 +23,8 @@ app.use(helmet({
   crossOriginResourcePolicy: { policy: 'cross-origin' },
 }));
 
-// CORS configuration - restricted to approved storefront, Vercel frontend, and admin origins
+// CORS configuration - restricted to approved storefront, Vercel frontend, admin origins,
+// and Shopify Checkout/Extension origins strictly on customer-facing order confirmation endpoints
 const allowedOrigins = [
   'https://abihacart.myshopify.com',
   'https://admin.shopify.com',
@@ -31,29 +32,78 @@ const allowedOrigins = [
   ...(config.urls.allowedOrigins || []),
 ].filter(Boolean);
 
+const shopifyCustomerCheckoutOrigins = [
+  'https://extensions.shopifycdn.com',
+  'https://shopify.com',
+  'https://checkout.shopify.com',
+  'https://shop.app',
+];
+
+const customerOrderConfirmationCorsPaths = new Set([
+  '/api/orders/checkout-confirmation-status',
+  '/api/orders/confirm-shopify-order',
+  '/api/orders/cancel-shopify-order',
+]);
+
 if (config.env === 'development' || config.env === 'test') {
   allowedOrigins.push('http://localhost:3000', 'http://localhost:5000', 'http://127.0.0.1:5000', 'http://127.0.0.1:3000');
 }
 
-app.use(cors({
-  origin: (origin, callback) => {
-    // Allow requests with no origin (e.g. mobile apps, curl, server-to-server)
-    if (!origin) return callback(null, true);
-    const isAllowed = allowedOrigins.includes(origin) ||
-      config.env === 'development' ||
-      config.env === 'test' ||
-      (origin.endsWith('.myshopify.com') && origin.startsWith('https://')) ||
-      (origin.endsWith('.vercel.app') && origin.startsWith('https://'));
+const isStandardAllowedOrigin = (origin) => (
+  allowedOrigins.includes(origin) ||
+  config.env === 'development' ||
+  (origin.endsWith('.myshopify.com') && origin.startsWith('https://')) ||
+  (origin.endsWith('.vercel.app') && origin.startsWith('https://'))
+);
 
-    if (isAllowed) {
-      return callback(null, true);
+app.use(cors((req, callback) => {
+  const origin = req.headers.origin;
+  const normalizedPath = (req.path || '/').replace(/\/+$/, '') || '/';
+  const isCustomerOrderEndpoint = customerOrderConfirmationCorsPaths.has(normalizedPath);
+
+  const corsBaseOptions = {
+    methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
+    allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Shopify-Hmac-Sha256', 'X-Conversation-Token', 'X-Agent-Key', 'X-Admin-Key'],
+    optionsSuccessStatus: 204,
+  };
+
+  // Allow requests with no Origin header (e.g. mobile apps, curl, server-to-server)
+  if (!origin) {
+    return callback(null, { ...corsBaseOptions, origin: true, credentials: !isCustomerOrderEndpoint });
+  }
+
+  // Strictly scoped support for Shopify Checkout / Order Status / Extension Web Worker origins
+  if (isCustomerOrderEndpoint) {
+    if (origin === 'null' || shopifyCustomerCheckoutOrigins.includes(origin)) {
+      return callback(null, {
+        ...corsBaseOptions,
+        origin: true,
+        credentials: false,
+      });
     }
-    logger.warn(`Blocked CORS request from unauthorized origin: ${origin}`);
-    return callback(new Error('Origin not allowed by CORS'));
-  },
-  credentials: true,
-  methods: ['GET', 'POST', 'PUT', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'X-Requested-With', 'X-Shopify-Hmac-Sha256', 'X-Conversation-Token', 'X-Agent-Key', 'X-Admin-Key'],
+    if (isStandardAllowedOrigin(origin)) {
+      return callback(null, {
+        ...corsBaseOptions,
+        origin: true,
+        credentials: false,
+      });
+    }
+  } else if (isStandardAllowedOrigin(origin)) {
+    return callback(null, {
+      ...corsBaseOptions,
+      origin: true,
+      credentials: true,
+    });
+  }
+
+  logger.warn(`Blocked CORS request from unauthorized origin: ${origin}`, {
+    path: normalizedPath,
+    method: req.method,
+  });
+  const corsError = new Error('Origin not allowed by CORS');
+  corsError.statusCode = 403;
+  corsError.isOperational = true;
+  return callback(corsError);
 }));
 
 // Request body parsers (Captures raw body buffer for Shopify webhook HMAC verification)

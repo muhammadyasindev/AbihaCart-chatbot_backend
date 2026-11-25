@@ -1086,6 +1086,8 @@ function renderOrderReviewHtml({ token, record }) {
 const confirmShopifyOrder = async (req, res, next) => {
   try {
     const token = req.query.token || req.body?.token;
+    const orderId = req.query.orderId || req.body?.orderId;
+    const orderNumber = req.query.orderNumber || req.body?.orderNumber;
     const isHtmlRequest = Boolean(req.headers.accept && req.headers.accept.includes('text/html'));
     const isGet = req.method === 'GET';
     const autoConfirmParam = req.query.confirm === 'true' || req.query.confirm === '1';
@@ -1186,7 +1188,7 @@ const confirmShopifyOrder = async (req, res, next) => {
     }
 
     // 2. POST (or GET with confirm=true): execute atomic confirmation & notify owner via Resend
-    const result = await orderConfirmationService.confirmOrderWithToken(token);
+    const result = await orderConfirmationService.confirmOrderWithToken(token, { orderId, orderNumber });
 
     if (!result.success) {
       if (isHtmlRequest) {
@@ -1276,34 +1278,38 @@ const confirmShopifyOrder = async (req, res, next) => {
 };
 
 /**
- * Cancels a Shopify order placed on the store via secure token or verified request (Phase 10)
+ * Cancels a Shopify order placed on the store strictly via signed confirmation token (Phase 10)
  * POST /api/orders/cancel-shopify-order
  */
 const cancelShopifyOrder = async (req, res, next) => {
   try {
     const token = req.query.token || req.body?.token;
     const orderId = req.query.orderId || req.body?.orderId;
+    const orderNumber = req.query.orderNumber || req.body?.orderNumber;
     const reason = req.body?.reason || req.query.reason || 'Customer requested cancellation via popup';
     const isHtmlRequest = Boolean(req.headers.accept && req.headers.accept.includes('text/html'));
 
-    if (!token && !orderId) {
+    if (!token) {
       if (isHtmlRequest) {
         return res.status(400).send(renderOrderResultHtml({
-          title: 'Missing Identifier',
+          title: 'Missing Confirmation Token',
           statusType: 'error',
-          message: 'Order confirmation token or order ID is required to cancel this order.',
+          message: 'A valid signed order confirmation token is required to cancel this order.',
         }));
       }
       return res.status(400).json({
         status: 'fail',
         statusCode: 400,
         error: 'Bad Request',
-        code: 'MISSING_IDENTIFIER',
-        message: 'Order confirmation token or order ID is required.',
+        code: 'MISSING_TOKEN',
+        message: 'A valid signed order confirmation token is required to cancel an order.',
       });
     }
 
-    const result = await orderConfirmationService.cancelOrderWithToken(token, reason, { orderId });
+    const result = await orderConfirmationService.cancelOrderWithToken(token, reason, {
+      orderId,
+      orderNumber,
+    });
 
     if (!result.success) {
       if (isHtmlRequest) {
@@ -1314,10 +1320,15 @@ const cancelShopifyOrder = async (req, res, next) => {
           message: result.message,
         }));
       }
+      const errorLabelMap = {
+        400: 'Bad Request',
+        404: 'Not Found',
+        410: 'Gone',
+      };
       return res.status(result.statusCode).json({
         status: 'fail',
         statusCode: result.statusCode,
-        error: result.code === 'TOKEN_EXPIRED' ? 'Gone' : (result.statusCode === 404 ? 'Not Found' : 'Forbidden'),
+        error: errorLabelMap[result.statusCode] || 'Forbidden',
         code: result.code,
         message: result.message,
       });

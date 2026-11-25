@@ -286,6 +286,34 @@ class ShopifyOrderConfirmationStore {
   }
 
   /**
+   * Finds a confirmation record by display order number (e.g. #1052 or 1052)
+   */
+  static async findByOrderNumber(orderNumber) {
+    if (!orderNumber) return null;
+    const raw = String(orderNumber).trim();
+    const withHash = raw.startsWith('#') ? raw : `#${raw}`;
+    const withoutHash = raw.replace(/^#/, '');
+
+    if (this.isDbConnected()) {
+      try {
+        const doc = await ShopifyOrderConfirmationModel.findOne({
+          orderNumber: { $in: [raw, withHash, withoutHash] },
+        }).lean();
+        if (doc) return doc;
+      } catch (err) {
+        logger.warn(`MongoDB orderNumber read failed, checking in memory: ${err.message}`);
+      }
+    }
+
+    for (const record of inMemoryConfirmations.values()) {
+      if ([raw, withHash, withoutHash].includes(String(record.orderNumber || '').trim())) {
+        return record;
+      }
+    }
+    return null;
+  }
+
+  /**
    * Finds a confirmation record by confirmation token
    */
   static async findByConfirmationToken(token) {

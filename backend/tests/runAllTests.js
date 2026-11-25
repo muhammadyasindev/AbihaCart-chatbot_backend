@@ -25,6 +25,7 @@ const testSuites = [
   'phase9_17CatalogAndIntelligence.test.js',
   'phase9_19OrderConfirmationMvp.test.js',
   'phase10OrderConfirmationPopup.test.js',
+  'shopifyOrderCancellationFix.test.js',
 ];
 
 console.log('======================================================================');
